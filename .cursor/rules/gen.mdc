@@ -1,0 +1,20 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+I'm using macos with ohmyzhs, I'm running devs beta of macos so if I get an error about my OS version thats why. 
+
+Always implement a fix when I'm asking you to fix smth, don't ask me act.
+
+When I'm asking you to do smth (implement a new feature etc) if you have any question about how smth should be done act feel free to ask me and ill be happy to answer.
+
+write your comments in french following this pattern. No comments in the same line as the code itself
+//this part do that
+codecodecodecodecodecodecodecodecodecodecodecodecodecodecodecode
+codecodecodecodecodecodecodecodecodecode
+codecodecodecodecodecodecodecode
+codecodecodecodecodecodecodecode
+//this other part do that
+codecodecodecodecodecodecodecodecodecode
+codecodecodecodecodecode
