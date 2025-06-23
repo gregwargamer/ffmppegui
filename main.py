@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
-"""FFmpeg Frontend - Interface graphique pour FFmpeg avec gestion de queue et multi-threading"""
-
+# Copyright (c) 2025 Greg Oire
+# MIT License – see LICENSE file
 import os
 import json
 import subprocess
@@ -286,6 +285,12 @@ class EncodeJob:
 
 def build_ffmpeg_stream(job: EncodeJob):
     """Construit le stream FFmpeg pour un job donné avec filtres"""
+    # Si remux, on ne fait que copier les flux
+    if getattr(job, 'encoder', None) == 'remux':
+        input_stream = ffmpeg.input(str(job.src_path))
+        output_stream = ffmpeg.output(input_stream, str(job.dst_path), vcodec='copy', acodec='copy')
+        return output_stream
+    
     input_stream = ffmpeg.input(str(job.src_path))
     
     # Appliquer les filtres si présents
@@ -642,7 +647,7 @@ class MainWindow:
         
         # Liste des jobs
         self.jobs: list[EncodeJob] = []
-        self.job_counter = 0
+        self.job_rows = {}
         
         # Variables d'état
         self.is_running = False
@@ -742,8 +747,8 @@ class MainWindow:
 
         notebook.add(file_section, text="Sélection de fichiers")
         notebook.add(settings_section, text="Paramètres d'encodage")
-        notebook.add(queue_section, text="File d'attente")
         notebook.add(inspector_frame, text="Inspecteur média")
+        notebook.add(queue_section, text="File d'attente")
 
         # === MEDIA INSPECTOR SECTION ===
         paned_window = ttk.PanedWindow(inspector_frame, orient=tk.HORIZONTAL)
@@ -785,7 +790,7 @@ class MainWindow:
         ttk.Button(folder_grid, text="Browse", command=self._select_output_folder, width=8).grid(row=1, column=2, pady=(8, 0))
         
         # Info label for output behavior
-        info_label = ttk.Label(folder_grid, text="💡 Optional: If no output folder is selected, files will be saved in the same folder as source with encoder suffix (e.g., filename_x265.mp4)", 
+        info_label = ttk.Label(folder_grid, text="Optional: If no output folder is selected, files will be saved in the same folder as source with encoder suffix (e.g., filename_x265.mp4)", 
                               font=("Helvetica", 9), foreground="gray")
         info_label.grid(row=2, column=0, columnspan=3, sticky="w", pady=(5, 0))
 
@@ -819,6 +824,16 @@ class MainWindow:
         self.watch_status.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
 
         # === ENCODING SETTINGS SECTION ===
+        # File selection for preview
+        file_select_row = ttk.Frame(settings_section)
+        file_select_row.pack(fill="x", pady=(0, 10))
+        
+        ttk.Label(file_select_row, text="Selected File:", font=("Helvetica", 10, "bold")).pack(side="left", padx=(0, 5))
+        self.selected_file_var = StringVar(value="No file selected")
+        self.selected_file_combo = ttk.Combobox(file_select_row, textvariable=self.selected_file_var, width=50, state="readonly")
+        self.selected_file_combo.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.selected_file_combo.bind("<<ComboboxSelected>>", self._on_file_selection_change)
+        
         # Top row - Media Type and Quick Presets
         top_row = ttk.Frame(settings_section)
         top_row.pack(fill="x", pady=(0, 15))
@@ -860,6 +875,7 @@ class MainWindow:
         # Encoder selection row  
         encoder_row = ttk.Frame(codec_encoder_frame)
         encoder_row.pack(fill="x")
+        self.encoder_row = encoder_row  # Stocker la référence pour modification dynamique
 
         ttk.Label(encoder_row, text="2. Encoder:", font=("Helvetica", 10, "bold"), width=10).pack(side="left", padx=(0, 5))
         self.global_encoder_var = StringVar(value="")
@@ -932,8 +948,10 @@ class MainWindow:
         self.resolution_var_settings = StringVar(value="Original")
         self.resolution_combo = ttk.Combobox(resolution_row, textvariable=self.resolution_var_settings, 
                                            values=["Original", "3840x2160 (4K)", "1920x1080 (1080p)", "1280x720 (720p)", 
-                                                  "854x480 (480p)", "640x360 (360p)", "Custom"], 
-                                           width=20, state="readonly")
+                                                  "854x480 (480p)", "640x360 (360p)", 
+                                                  "2160x3840 (4K Portrait)", "1080x1920 (1080p Portrait)", 
+                                                  "720x1280 (720p Portrait)", "480x854 (480p Portrait)", "Custom"], 
+                                           width=25, state="readonly")
         self.resolution_combo.pack(side="left", padx=(0, 10))
         self.resolution_combo.bind("<<ComboboxSelected>>", self._on_resolution_change)
         
@@ -969,6 +987,52 @@ class MainWindow:
         # Custom megapixels entry (hidden by default)
         self.custom_mp_var = StringVar(value="")
         self.custom_mp_entry = ttk.Entry(self.image_res_frame, textvariable=self.custom_mp_var, width=8)
+
+        # Ajout des contrôles de recadrage pour la vidéo
+        self.crop_frame = ttk.Frame(resolution_row)
+        ttk.Label(self.crop_frame, text="Crop (px):", font=("Helvetica", 10, "bold")).pack(side="left", padx=(10, 5))
+        
+        ttk.Label(self.crop_frame, text="L:").pack(side="left", padx=(0, 2))
+        self.crop_left_var = StringVar(value="0")
+        self.crop_left_entry = ttk.Entry(self.crop_frame, textvariable=self.crop_left_var, width=5)
+        self.crop_left_entry.pack(side="left", padx=(0, 5))
+        
+        ttk.Label(self.crop_frame, text="R:").pack(side="left", padx=(0, 2))
+        self.crop_right_var = StringVar(value="0")
+        self.crop_right_entry = ttk.Entry(self.crop_frame, textvariable=self.crop_right_var, width=5)
+        self.crop_right_entry.pack(side="left", padx=(0, 5))
+        
+        ttk.Label(self.crop_frame, text="T:").pack(side="left", padx=(0, 2))
+        self.crop_top_var = StringVar(value="0")
+        self.crop_top_entry = ttk.Entry(self.crop_frame, textvariable=self.crop_top_var, width=5)
+        self.crop_top_entry.pack(side="left", padx=(0, 5))
+        
+        ttk.Label(self.crop_frame, text="B:").pack(side="left", padx=(0, 2))
+        self.crop_bottom_var = StringVar(value="0")
+        self.crop_bottom_entry = ttk.Entry(self.crop_frame, textvariable=self.crop_bottom_var, width=5)
+        self.crop_bottom_entry.pack(side="left", padx=(0, 5))
+        
+        self.crop_frame.pack(side="left", padx=(10, 0))
+        
+        # Ajout des contrôles de timestamp et de prévisualisation de frame (pour vidéo uniquement)
+        self.preview_row = ttk.Frame(quality_frame)
+        self.preview_row.pack(fill="x", pady=(8, 0))
+        
+        ttk.Label(self.preview_row, text="Preview Timestamp:", font=("Helvetica", 10, "bold")).pack(side="left", padx=(0, 5))
+        self.timestamp_var = StringVar(value="00:00:00")
+        self.timestamp_entry = ttk.Entry(self.preview_row, textvariable=self.timestamp_var, width=10)
+        self.timestamp_entry.pack(side="left", padx=(0, 10))
+        
+        ttk.Button(self.preview_row, text="Previous Frame", command=self._preview_previous_frame).pack(side="left", padx=(0, 5))
+        ttk.Button(self.preview_row, text="Render Frame", command=self._render_preview_frame).pack(side="left", padx=(0, 5))
+        ttk.Button(self.preview_row, text="Next Frame", command=self._preview_next_frame).pack(side="left", padx=(0, 5))
+        
+        # Cadre séparé pour afficher l'image de prévisualisation
+        preview_image_row = ttk.Frame(quality_frame)
+        preview_image_row.pack(fill="x", pady=(8, 0))
+        
+        self.preview_image_label = ttk.Label(preview_image_row, text="No preview available", relief="sunken", width=40)
+        self.preview_image_label.pack(side="left", padx=(0, 10))
 
         # Custom flags row
         custom_row = ttk.Frame(quality_frame)
@@ -1199,12 +1263,15 @@ class MainWindow:
             # Apply default encoder based on mode
             if mode == "video":
                 job.encoder = Settings.data.get("default_video_encoder")
+                # Copier toutes les pistes audio par défaut
+                job.copy_audio = True
             elif mode == "audio":
                 job.encoder = Settings.data.get("default_audio_encoder")
             else:
                 job.encoder = Settings.data.get("default_image_encoder")
             self.jobs.append(job)
             self.tree.insert("", "end", iid=str(id(job)), values=(p.name, "-", "-", "0%", "pending"))
+            self.job_rows[str(id(job))] = {"job": job}
             # do not submit yet; submission happens when user presses Start Encoding
         
         self._update_inspector_file_list()
@@ -1280,7 +1347,8 @@ class MainWindow:
                 ("MPEG-4", "mpeg4"),
                 ("MPEG-2", "mpeg2video"),
                 ("ProRes", "prores"),
-                ("DNxHD", "dnxhd")
+                ("DNxHD", "dnxhd"),
+                ("Remux (no re-encode)", "remux")
             ]
         elif media_type == "audio":
             codec_choices = [
@@ -1289,6 +1357,7 @@ class MainWindow:
                 ("Opus", "opus"),
                 ("Vorbis", "vorbis"),
                 ("FLAC", "flac"),
+                ("ALAC", "alac"),
                 ("AC3", "ac3"),
                 ("PCM", "pcm_s16le"),
                 ("WAV", "wav")
@@ -1300,8 +1369,12 @@ class MainWindow:
                 ("JPEG", "mjpeg"),
                 ("BMP", "bmp"),
                 ("TIFF", "tiff"),
-                ("AVIF", "libaom-av1")
+                ("AVIF", "libaom-av1"),
+                ("JPEG XL", "jpegxl")
             ]
+        
+        # Ajouter l'option personnalisée
+        codec_choices.append(("Custom", "custom"))
         
         # Obtenir les codecs disponibles depuis FFmpeg
         available_codecs = FFmpegHelpers.available_codecs()
@@ -1311,7 +1384,7 @@ class MainWindow:
         filtered_choices = []
         for display, codec in codec_choices:
             # Vérifier si le codec exact est disponible OU si on a des encodeurs pour ce codec
-            if (codec in codec_list or 
+            if codec == "custom" or (codec in codec_list or 
                 codec.lower() in [c.lower() for c in codec_list] or
                 self._has_encoders_for_codec(codec)):
                 filtered_choices.append((display, codec))
@@ -1356,6 +1429,7 @@ class MainWindow:
             'opus': ['libopus'],
             'vorbis': ['libvorbis'],
             'flac': ['flac'],
+            'alac': ['alac'],
             'ac3': ['ac3'],
             'pcm_s16le': ['pcm_s16le'],
             'wav': ['pcm_s16le'],
@@ -1363,7 +1437,9 @@ class MainWindow:
             'png': ['png'],
             'mjpeg': ['mjpeg'],
             'bmp': ['bmp'],
-            'tiff': ['tiff']
+            'tiff': ['tiff'],
+            'libaom-av1': ['libaom-av1'],
+            'jpegxl': ['libjxl']
         }
         
         expected_encoders = codec_encoder_map.get(codec.lower(), [])
@@ -1492,7 +1568,11 @@ class MainWindow:
                 "1920x1080 (1080p)": (1920, 1080),
                 "1280x720 (720p)": (1280, 720),
                 "854x480 (480p)": (854, 480),
-                "640x360 (360p)": (640, 360)
+                "640x360 (360p)": (640, 360),
+                "2160x3840 (4K Portrait)": (2160, 3840),
+                "1080x1920 (1080p Portrait)": (1080, 1920),
+                "720x1280 (720p Portrait)": (720, 1280),
+                "480x854 (480p Portrait)": (480, 854)
             }
             return resolution_map.get(resolution, (0, 0))
 
@@ -1506,6 +1586,21 @@ class MainWindow:
         
         # Obtenir le vrai nom du codec à partir du display
         codec = self._get_codec_from_display(codec_display).lower()
+        
+        # Vérifier si le codec est 'custom'
+        if codec == "custom":
+            # Cacher le combobox et afficher un champ de saisie texte
+            self.global_encoder_combo.pack_forget()
+            if not hasattr(self, 'global_encoder_entry'):
+                self.global_encoder_entry = ttk.Entry(self.encoder_row, textvariable=self.global_encoder_var, width=30)
+            self.global_encoder_entry.pack(side="left", padx=(5, 0))
+            self.global_encoder_var.set("")
+            return
+        
+        # Si on avait un champ de saisie texte, le cacher et réafficher le combobox
+        if hasattr(self, 'global_encoder_entry'):
+            self.global_encoder_entry.pack_forget()
+            self.global_encoder_combo.pack(side="left", padx=(5, 0))
         
         # Obtenir tous les encodeurs avec descriptions
         all_encoders = FFmpegHelpers.available_encoders()
@@ -1614,6 +1709,9 @@ class MainWindow:
             self.image_res_frame.pack_forget()
             # Appliquer le mode vidéo actuel
             self._on_video_mode_change()
+            # Afficher les contrôles de recadrage et de prévisualisation
+            self.crop_frame.pack(side="left", padx=(10, 0))
+            self.preview_row.pack(fill="x", pady=(8, 0))
             
         elif media_type == "image":
             # Masquer les contrôles vidéo, afficher les contrôles image
@@ -1626,6 +1724,9 @@ class MainWindow:
             self.bitrate_label.pack_forget()
             self.bitrate_entry.pack_forget()
             self.multipass_check.pack_forget()
+            # Masquer les contrôles de recadrage et de prévisualisation
+            self.crop_frame.pack_forget()
+            self.preview_row.pack_forget()
             
         elif media_type == "audio":
             # Masquer tous les contrôles de résolution et mode vidéo
@@ -1638,6 +1739,9 @@ class MainWindow:
             self.bitrate_label.pack_forget()
             self.bitrate_entry.pack_forget()
             self.multipass_check.pack_forget()
+            # Masquer les contrôles de recadrage et de prévisualisation
+            self.crop_frame.pack_forget()
+            self.preview_row.pack_forget()
         
         # Obtenir l'encodeur actuel à partir de la variable globale avec une valeur par défaut
         encoder_display = self.global_encoder_var.get()
@@ -1886,6 +1990,7 @@ class MainWindow:
                 new_job.custom_flags = job.custom_flags
                 self.jobs.append(new_job)
                 self.tree.insert("", "end", iid=str(id(new_job)), values=(new_job.src_path.name, new_job.encoder or "-", new_job.quality or "-", "0%", "pending"))
+                self.job_rows[str(id(new_job))] = {"job": new_job}
 
     def _set_codec_for_all(self):
         """Applique tous les paramètres d'encodage globaux à tous les jobs du type sélectionné"""
@@ -1977,19 +2082,15 @@ class MainWindow:
             self._set_codec_for_all()
 
     def _get_encoder_name_from_display(self, display_text: str) -> str:
-        """Extrait le nom de l'encodeur à partir du texte affiché"""
+        """Extrait le vrai nom de l'encodeur à partir du texte affiché"""
         if not display_text:
             return ""
-        
-        # Utiliser la nouvelle mapping si disponible
         if hasattr(self, '_current_encoder_mapping') and display_text in self._current_encoder_mapping:
             return self._current_encoder_mapping[display_text]
-        
-        # Fallback vers l'ancienne méthode
-        if " - " in display_text:
-            return display_text.split(" - ")[0]
-        
-        return display_text
+        # Si on utilise un champ de saisie texte (pour custom), retourner le texte directement
+        if hasattr(self, 'global_encoder_entry') and self.global_encoder_entry.winfo_ismapped():
+            return display_text
+        return display_text.split(' - ')[0] if ' - ' in display_text else display_text
 
     def _get_codec_from_display(self, display_text: str) -> str:
         """Extrait le vrai nom du codec à partir du texte affiché"""
@@ -2001,6 +2102,11 @@ class MainWindow:
 
     def _start_encoding(self):
         """Commence l'encodage de tous les jobs en attente"""
+        # Vérifier qu'un dossier de sortie est sélectionné
+        if not self.output_folder.get() or self.output_folder.get().startswith("No output"):
+            messagebox.showwarning("No Output Folder", "Please select an output folder before starting encoding.")
+            return
+        
         pending_jobs = [job for job in self.jobs if job.status == "pending"]
         if not pending_jobs:
             messagebox.showinfo("No Jobs", "No pending jobs to encode.")
@@ -2068,7 +2174,7 @@ class MainWindow:
             if cancelled_jobs:
                 message_parts.append(f"🚫 {len(cancelled_jobs)} job(s) annulé(s)")
             
-            message = "🎬 Encodage terminé!\n\n" + "\n".join(message_parts)
+            message = "Encodage terminé!\n\n" + "\n".join(message_parts)
             
             # Afficher la notification
             messagebox.showinfo("Encodage terminé", message)
@@ -2161,6 +2267,7 @@ class MainWindow:
         self.jobs.clear()
         self.tree.delete(*self.tree.get_children())
         self.progress_bar['value'] = 0
+        self.job_rows.clear()
         self._update_inspector_file_list()
         
         # Remettre les boutons à l'état idle
@@ -2212,6 +2319,7 @@ class MainWindow:
                     
                 self.jobs.remove(job)
                 self.tree.delete(selected[0])
+                self.job_rows.pop(selected[0], None)
                 self._update_inspector_file_list()
                 
                 # Mettre à jour l'état des boutons si aucun job n'est actif
@@ -2595,31 +2703,34 @@ class MainWindow:
                     pass
             
             info = {
-                "📹 Résolution": f"{width}x{height}",
-                "📐 Ratio d'aspect": aspect_ratio,
-                "⏱️ Durée": format_duration(format_info.get('duration', 'N/A')),
-                "🎞️ Images/sec": f"{fps} fps" if fps != 'N/A' else 'N/A',
-                "🎬 Codec Vidéo": video_stream.get('codec_long_name', video_stream.get('codec_name', 'N/A')),
-                "📊 Débit Vidéo": format_bitrate(video_stream.get('bit_rate', 'N/A')),
-                "🎨 Format Pixel": video_stream.get('pix_fmt', 'N/A'),
-                "📁 Taille Fichier": format_file_size(format_info.get('size', 'N/A')),
+                "Résolution": f"{width}x{height}",
+                "Ratio d'aspect": aspect_ratio,
+                "Durée": format_duration(format_info.get('duration', 'N/A')),
+                "Images/sec": f"{fps} fps" if fps != 'N/A' else 'N/A',
+                "Codec Vidéo": video_stream.get('codec_long_name', video_stream.get('codec_name', 'N/A')),
+                "Débit Vidéo": format_bitrate(video_stream.get('bit_rate', 'N/A')),
+                "Format Pixel": video_stream.get('pix_fmt', 'N/A'),
+                "Taille Fichier": format_file_size(format_info.get('size', 'N/A')),
             }
             
             # Informations audio si présentes
             if audio_streams:
                 main_audio = audio_streams[0]
                 info.update({
-                    "🔊 Codec Audio": main_audio.get('codec_long_name', main_audio.get('codec_name', 'N/A')),
-                    "🎵 Débit Audio": format_bitrate(main_audio.get('bit_rate', 'N/A')),
-                    "📢 Canaux Audio": main_audio.get('channel_layout', str(main_audio.get('channels', 'N/A'))),
-                    "🎼 Fréq. Échantillonnage": f"{main_audio.get('sample_rate', 'N/A')} Hz" if main_audio.get('sample_rate') else 'N/A',
+                                    "Codec Audio": main_audio.get('codec_long_name', main_audio.get('codec_name', 'N/A')),
+                "Débit Audio": format_bitrate(main_audio.get('bit_rate', 'N/A')),
+                                         "Canaux Audio": main_audio.get('channel_layout', str(main_audio.get('channels', 'N/A'))),
+                     "Fréq. Échantillonnage": f"{main_audio.get('sample_rate', 'N/A')} Hz" if main_audio.get('sample_rate') else 'N/A',
                 })
                 
                 # Si plusieurs pistes audio
                 if len(audio_streams) > 1:
-                    info["🎙️ Pistes Audio"] = f"{len(audio_streams)} pistes"
+                    info["Pistes Audio"] = f"{len(audio_streams)} pistes"
             else:
-                info["🔇 Audio"] = "Aucune piste audio"
+                info["Audio"] = "Aucune piste audio"
+            
+            # Suggérer automatiquement une résolution basée sur le ratio d'aspect
+            self._suggest_resolution_from_aspect_ratio(width, height)
                 
         elif mode == 'audio':
             audio_stream = next((s for s in streams if s.get('codec_type') == 'audio'), {})
@@ -2644,26 +2755,26 @@ class MainWindow:
                 try:
                     br = int(bitrate)
                     if br >= 320000:
-                        quality_indicator = "🟢 Très haute (≥320kbps)"
+                        quality_indicator = "Très haute (≥320kbps)"
                     elif br >= 192000:
-                        quality_indicator = "🟡 Haute (≥192kbps)"
+                        quality_indicator = "Haute (≥192kbps)"
                     elif br >= 128000:
-                        quality_indicator = "🟠 Moyenne (≥128kbps)"
+                        quality_indicator = "Moyenne (≥128kbps)"
                     else:
-                        quality_indicator = "🔴 Basse (<128kbps)"
+                        quality_indicator = "Basse (<128kbps)"
                 except:
                     pass
             
             info = {
-                "⏱️ Durée": format_duration(format_info.get('duration', 'N/A')),
-                "🎵 Codec": audio_stream.get('codec_long_name', audio_stream.get('codec_name', 'N/A')),
-                "📊 Débit": format_bitrate(audio_stream.get('bit_rate', calculated_bitrate)),
-                "📈 Qualité": quality_indicator,
-                "📢 Canaux": audio_stream.get('channel_layout', str(audio_stream.get('channels', 'N/A'))),
-                "🎼 Fréq. Échantillonnage": f"{audio_stream.get('sample_rate', 'N/A')} Hz" if audio_stream.get('sample_rate') else 'N/A',
-                "🎛️ Bits par échantillon": f"{audio_stream.get('bits_per_sample', 'N/A')} bits" if audio_stream.get('bits_per_sample') else 'N/A',
-                "📁 Taille Fichier": format_file_size(format_info.get('size', 'N/A')),
-                "🏷️ Format Container": format_info.get('format_long_name', format_info.get('format_name', 'N/A')),
+                "Durée": format_duration(format_info.get('duration', 'N/A')),
+                "Codec": audio_stream.get('codec_long_name', audio_stream.get('codec_name', 'N/A')),
+                "Débit": format_bitrate(audio_stream.get('bit_rate', calculated_bitrate)),
+                "Qualité": quality_indicator,
+                "Canaux": audio_stream.get('channel_layout', str(audio_stream.get('channels', 'N/A'))),
+                "Fréq. Échantillonnage": f"{audio_stream.get('sample_rate', 'N/A')} Hz" if audio_stream.get('sample_rate') else 'N/A',
+                "Bits par échantillon": f"{audio_stream.get('bits_per_sample', 'N/A')} bits" if audio_stream.get('bits_per_sample') else 'N/A',
+                "Taille Fichier": format_file_size(format_info.get('size', 'N/A')),
+                "Format Container": format_info.get('format_long_name', format_info.get('format_name', 'N/A')),
             }
             
             # Métadonnées si disponibles
@@ -2671,15 +2782,15 @@ class MainWindow:
             if tags:
                 metadata_info = {}
                 if tags.get('title'):
-                    metadata_info["🎤 Titre"] = tags['title']
+                    metadata_info["Titre"] = tags['title']
                 if tags.get('artist'):
-                    metadata_info["👤 Artiste"] = tags['artist']
+                    metadata_info["Artiste"] = tags['artist']
                 if tags.get('album'):
-                    metadata_info["💿 Album"] = tags['album']
+                    metadata_info["Album"] = tags['album']
                 if tags.get('date') or tags.get('year'):
-                    metadata_info["📅 Année"] = tags.get('date', tags.get('year'))
+                    metadata_info["Année"] = tags.get('date', tags.get('year'))
                 if tags.get('genre'):
-                    metadata_info["🎭 Genre"] = tags['genre']
+                    metadata_info["Genre"] = tags['genre']
                     
                 if metadata_info:
                     info.update(metadata_info)
@@ -2715,13 +2826,13 @@ class MainWindow:
                 try:
                     w, h = int(width), int(height)
                     if w >= 3840 and h >= 2160:
-                        resolution_quality = "🟢 4K/Ultra HD"
+                        resolution_quality = "4K/Ultra HD"
                     elif w >= 1920 and h >= 1080:
-                        resolution_quality = "🟡 Full HD"
+                        resolution_quality = "Full HD"
                     elif w >= 1280 and h >= 720:
-                        resolution_quality = "🟠 HD"
+                        resolution_quality = "HD"
                     else:
-                        resolution_quality = "🔴 SD"
+                        resolution_quality = "SD"
                 except:
                     pass
             
@@ -2738,15 +2849,15 @@ class MainWindow:
                 color_info = pix_fmt.upper()
             
             info = {
-                "📹 Résolution": f"{width}x{height}",
-                "📊 Mégapixels": megapixels,
-                "📐 Ratio d'aspect": aspect_ratio,
-                "📈 Qualité": resolution_quality,
-                "🎨 Codec": image_stream.get('codec_long_name', image_stream.get('codec_name', 'N/A')),
-                "🎭 Format Pixel": image_stream.get('pix_fmt', 'N/A'),
-                "🌈 Type Couleur": color_info,
-                "🏷️ Espace Couleur": image_stream.get('color_space', 'N/A'),
-                "📁 Taille Fichier": format_file_size(format_info.get('size', 'N/A')),
+                "Résolution": f"{width}x{height}",
+                "Mégapixels": megapixels,
+                "Ratio d'aspect": aspect_ratio,
+                "Qualité": resolution_quality,
+                "Codec": image_stream.get('codec_long_name', image_stream.get('codec_name', 'N/A')),
+                "Format Pixel": image_stream.get('pix_fmt', 'N/A'),
+                "Type Couleur": color_info,
+                "Espace Couleur": image_stream.get('color_space', 'N/A'),
+                "Taille Fichier": format_file_size(format_info.get('size', 'N/A')),
             }
             
             # Métadonnées EXIF si disponibles
@@ -2754,13 +2865,13 @@ class MainWindow:
             if tags:
                 metadata_info = {}
                 if tags.get('creation_time'):
-                    metadata_info["📅 Date Création"] = tags['creation_time']
+                    metadata_info["Date Création"] = tags['creation_time']
                 if tags.get('make'):
-                    metadata_info["📷 Fabricant"] = tags['make']
+                    metadata_info["Fabricant"] = tags['make']
                 if tags.get('model'):
-                    metadata_info["📸 Modèle"] = tags['model']
+                    metadata_info["Modèle"] = tags['model']
                 if tags.get('software'):
-                    metadata_info["💻 Logiciel"] = tags['software']
+                    metadata_info["Logiciel"] = tags['software']
                     
                 if metadata_info:
                     info.update(metadata_info)
@@ -2772,7 +2883,7 @@ class MainWindow:
         
         # Afficher un message si aucune information
         if not info:
-            ttk.Label(self.inspector_info_frame, text="❌ Impossible de lire les informations du média.", 
+            ttk.Label(self.inspector_info_frame, text="Impossible de lire les informations du média.", 
                      font=("Helvetica", 11), foreground="red").pack(padx=10, pady=20)
             return
 
@@ -2824,24 +2935,179 @@ class MainWindow:
             widget.destroy()
 
     def _update_inspector_file_list(self):
-        """Met à jour la liste des fichiers dans l'inspecteur média"""
-        # Sauvegarder la sélection actuelle
-        selection = self.inspector_tree.selection()
-        selected_id = selection[0] if selection else None
+        """Met à jour la liste des fichiers dans l'inspecteur et dans le sélecteur de fichier des paramètres d'encodage"""
+        # Nettoyer la liste
+        for item in self.inspector_tree.get_children():
+            self.inspector_tree.delete(item)
+        
+        # Ajouter les jobs de la queue
+        file_list = []
+        for job_id, job_data in self.job_rows.items():
+            job = job_data["job"]
+            filename = job.src_path.name
+            self.inspector_tree.insert("", "end", iid=job_id, values=(filename,))
+            file_list.append(filename)
+        
+        # Mettre à jour le sélecteur de fichier dans les paramètres d'encodage
+        if hasattr(self, 'selected_file_combo'):
+            self.selected_file_combo['values'] = file_list
+            if file_list and self.selected_file_var.get() == "No file selected":
+                self.selected_file_var.set(file_list[0])
+        self._render_preview_frame()
 
-        # Effacer la liste actuelle
-        for i in self.inspector_tree.get_children():
-            self.inspector_tree.delete(i)
+    def _on_file_selection_change(self, event=None):
+        """Gère le changement de sélection de fichier dans les paramètres d'encodage"""
+        selected_filename = self.selected_file_var.get()
+        if selected_filename == "No file selected":
+            return
         
-        # Remplir avec les jobs actuels
-        for job in self.jobs:
-            self.inspector_tree.insert("", "end", iid=str(id(job)), values=(job.src_path.name,))
+        # Trouver le job correspondant au fichier sélectionné
+        for job_id, job_data in self.job_rows.items():
+            job = job_data["job"]
+            if job.src_path.name == selected_filename:
+                # Sélectionner ce fichier dans l'inspecteur
+                self.inspector_tree.selection_set(job_id)
+                self.inspector_tree.see(job_id)
+                # Déclencher l'inspection du fichier
+                self._on_inspector_selection_change()
+                # Afficher immédiatement un aperçu de frame
+                self._render_preview_frame()
+                break
+
+    def _suggest_resolution_from_aspect_ratio(self, width: int, height: int):
+        """Suggère une résolution basée sur le ratio d'aspect du fichier source"""
+        if width == 0 or height == 0:
+            return
         
-        # Restaurer la sélection si possible
-        if selected_id and self.inspector_tree.exists(selected_id):
-            self.inspector_tree.selection_set(selected_id)
-            self.inspector_tree.focus(selected_id)
-            self.inspector_tree.see(selected_id)
+        aspect_ratio = width / height
+        
+        # Déterminer si c'est du portrait ou du paysage
+        if aspect_ratio < 1:  # Portrait (9:16, etc.)
+            if aspect_ratio <= 0.5625:  # 9:16 ratio
+                self.resolution_var_settings.set("1080x1920 (1080p Portrait)")
+            elif aspect_ratio <= 0.75:  # 3:4 ratio
+                self.resolution_var_settings.set("720x1280 (720p Portrait)")
+        else:  # Paysage (16:9, etc.)
+            if aspect_ratio >= 1.77:  # 16:9 ratio
+                self.resolution_var_settings.set("1920x1080 (1080p)")
+            elif aspect_ratio >= 1.33:  # 4:3 ratio
+                self.resolution_var_settings.set("1280x720 (720p)")
+
+    def _render_preview_frame(self):
+        """Rend une frame de prévisualisation basée sur le timestamp saisi"""
+        # Obtenir le fichier sélectionné dans les paramètres d'encodage
+        selected_filename = self.selected_file_var.get()
+        if selected_filename == "No file selected":
+            self.preview_image_label.config(text="No file selected for preview")
+            return
+        
+        # Trouver le job correspondant
+        selected_job = None
+        for job_id, job_data in self.job_rows.items():
+            job = job_data["job"]
+            if job.src_path.name == selected_filename:
+                selected_job = job
+                break
+        
+        if not selected_job:
+            self.preview_image_label.config(text="Selected file not found in queue")
+            return
+        
+        # Aperçu uniquement disponible pour les vidéos
+        if selected_job.mode != "video":
+            self.preview_image_label.config(text="Preview available for video files only")
+            return
+
+        timestamp = self.timestamp_var.get()
+        
+        # Vérifier si PIL est disponible pour afficher l'image
+        try:
+            from PIL import Image, ImageTk
+        except ImportError:
+            self.preview_image_label.config(text="PIL not installed, preview unavailable")
+            return
+        
+        # Créer un fichier temporaire pour la frame
+        import tempfile
+        import subprocess
+        import os
+        
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
+            temp_path = temp_file.name
+        
+        # Construire la commande FFmpeg pour extraire une frame avec les paramètres de recadrage
+        crop_left = self.crop_left_var.get() or "0"
+        crop_right = self.crop_right_var.get() or "0"
+        crop_top = self.crop_top_var.get() or "0"
+        crop_bottom = self.crop_bottom_var.get() or "0"
+        
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-i", str(selected_job.src_path),
+            "-ss", timestamp,
+            "-vframes", "1",
+            "-c:v", "png"
+        ]
+        
+        # Ajouter le filtre de recadrage si nécessaire
+        if any(val != "0" for val in [crop_left, crop_right, crop_top, crop_bottom]):
+            crop_filter = f"crop=iw-{crop_left}-{crop_right}:ih-{crop_top}-{crop_bottom}:{crop_left}:{crop_top}"
+            ffmpeg_cmd.extend(["-vf", crop_filter])
+        
+        ffmpeg_cmd.extend(["-y", temp_path])
+        
+        try:
+            subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            
+            # Charger et afficher l'image
+            img = Image.open(temp_path)
+            # Redimensionner l'image pour l'aperçu (par exemple, 300x200 max)
+            img.thumbnail((300, 200))
+            photo = ImageTk.PhotoImage(img)
+            self.preview_image_label.config(image=photo, text="")
+            self.preview_image_label.image = photo  # Garder une référence
+        except Exception as e:
+            self.preview_image_label.config(text=f"Error rendering frame: {str(e)}")
+        finally:
+            # Nettoyer le fichier temporaire
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+
+    def _preview_previous_frame(self):
+        """Navigue à la frame précédente basée sur le timestamp actuel"""
+        try:
+            current_time = self._parse_timestamp(self.timestamp_var.get())
+            if current_time > 1:
+                current_time -= 1
+                self.timestamp_var.set(self._format_timestamp(current_time))
+                self._render_preview_frame()
+        except ValueError:
+            self.preview_image_label.config(text="Invalid timestamp format")
+
+    def _preview_next_frame(self):
+        """Navigue à la frame suivante basée sur le timestamp actuel"""
+        try:
+            current_time = self._parse_timestamp(self.timestamp_var.get())
+            current_time += 1
+            self.timestamp_var.set(self._format_timestamp(current_time))
+            self._render_preview_frame()
+        except ValueError:
+            self.preview_image_label.config(text="Invalid timestamp format")
+
+    def _parse_timestamp(self, timestamp: str) -> int:
+        """Convertit un timestamp HH:MM:SS en secondes"""
+        parts = timestamp.split(':')
+        if len(parts) != 3:
+            raise ValueError("Invalid timestamp format")
+        hours, minutes, seconds = map(int, parts)
+        return hours * 3600 + minutes * 60 + seconds
+
+    def _format_timestamp(self, seconds: int) -> str:
+        """Convertit des secondes en timestamp HH:MM:SS"""
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        secs = seconds % 60
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
 class SettingsWindow:
