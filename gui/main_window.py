@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import sys
 import threading
 from pathlib import Path
 from tkinter import (Tk, filedialog, ttk, Menu, messagebox, StringVar, BooleanVar, Text, Toplevel, IntVar, DoubleVar)
@@ -1069,20 +1070,40 @@ class MainWindow:
         self._update_quality_preset_controls()
 
     def _encoder_supports_codec(self, encoder_name: str, codec: str) -> bool:
-        """Détermine si un encodeur supporte un codec donné"""
+        """Détermine si un encodeur supporte un codec donné basé sur une map prédéfinie."""
         codec_encoder_map = {
             'h264': ['libx264', 'h264_nvenc', 'h264_qsv', 'h264_amf', 'h264_videotoolbox'],
             'hevc': ['libx265', 'hevc_nvenc', 'hevc_qsv', 'hevc_amf', 'hevc_videotoolbox'],
             'av1': ['libsvtav1', 'libaom-av1', 'av1_nvenc', 'av1_qsv'],
             'vp9': ['libvpx-vp9'],
             'vp8': ['libvpx'],
+            'mpeg4': ['libxvid', 'mpeg4'],
+            'mpeg2video': ['mpeg2video'],
+            'prores': ['prores_ks'],
+            'dnxhd': ['dnxhd'],
             'aac': ['aac', 'libfdk_aac'],
             'mp3': ['libmp3lame'],
             'opus': ['libopus'],
             'vorbis': ['libvorbis'],
-            'webp': ['libwebp']
+            'flac': ['flac'],
+            'alac': ['alac'],
+            'ac3': ['ac3'],
+            'pcm_s16le': ['pcm_s16le'],
+            'wav': ['pcm_s16le'], # WAV often uses PCM
+            'webp': ['libwebp', 'libwebp_anim'],
+            'png': ['png'],
+            'mjpeg': ['mjpeg'], # For JPEG in video context or motion JPEG
+            'bmp': ['bmp'],
+            'tiff': ['tiff'],
+            'libaom-av1': ['libaom-av1'], # Specifically for AVIF if libaom-av1 is chosen as codec
+            'jpegxl': ['libjxl']
         }
-        return encoder_name in codec_encoder_map.get(codec, [encoder_name])
+
+        # If the codec is in our map, check if the encoder is one of the known ones.
+        if codec in codec_encoder_map:
+            return encoder_name in codec_encoder_map[codec]
+        # If the codec is not in our map, this function cannot confirm support based on the map.
+        return False
 
     def _update_quality_preset_controls(self):
         """Met à jour les contrôles qualité/preset basés sur le codec/encodeur sélectionné"""
@@ -2325,12 +2346,41 @@ class MainWindow:
         scrollbar.pack(side="right", fill="y")
 
         # Bind mousewheel pour le scrolling
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        
-        canvas.bind("<MouseWheel>", _on_mousewheel)  # Windows
-        canvas.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))  # Linux
-        canvas.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))   # Linux
+        def _on_mousewheel_refined(event):
+            if sys.platform == "darwin":  # macOS
+                canvas.yview_scroll(-1 * event.delta, "units")
+            elif sys.platform.startswith("linux"):
+                if event.num == 4: # Scroll up
+                    canvas.yview_scroll(-1, "units")
+                elif event.num == 5: # Scroll down
+                    canvas.yview_scroll(1, "units")
+            else: # Windows and others
+                # On Windows, event.delta is usually a multiple of 120
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        # Remove old bindings first to avoid multiple bindings if this code is run multiple times
+        # (though in this context it's part of UI setup, so less critical unless _update_inspector_ui is called repeatedly on same widgets)
+        canvas.unbind("<MouseWheel>")
+        canvas.unbind("<Button-4>")
+        canvas.unbind("<Button-5>")
+
+        # Apply new bindings
+        canvas.bind("<MouseWheel>", _on_mousewheel_refined) # For macOS, Windows
+
+        if sys.platform.startswith("linux"):
+            # For Linux, Button-4 and Button-5 are common for mouse wheel
+            canvas.bind("<Button-4>", _on_mousewheel_refined)
+            canvas.bind("<Button-5>", _on_mousewheel_refined)
+
+        # Ensure the canvas (or the scrollable_frame) can get focus to receive scroll events.
+        # Clicking into the area should allow scrolling.
+        # Binding to <Enter> to set focus can be aggressive, let's try without first.
+        # If issues persist, focusing on <Enter> or <Button-1> on the canvas/scrollable_frame can be added.
+        # Forcing focus on update might also steal focus unexpectedly.
+        # A common practice is to allow the widget to accept focus, then user click sets it.
+        canvas.focus_set() # Attempt to set focus initially
+        scrollable_frame.bind("<Enter>", lambda e: canvas.focus_set())
+
 
     def _clear_inspector(self):
         for widget in self.inspector_info_frame.winfo_children():
