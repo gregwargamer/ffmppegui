@@ -1,10 +1,10 @@
 # FFmpeg Easy
 
-A modern graphical interface for FFmpeg that makes encoding video, audio, and image files incredibly simple.
+A modern graphical interface for FFmpeg that makes encoding video, audio, and image files.
 
 ## What it does
 
-This application makes FFmpeg accessible to everyone with an intuitive interface. Add your files, choose an encoder, and start encoding. The interface intelligently adapts based on the selected media type.
+This application makes FFmpeg relatively accessible to everyone with an interface. Add your files, choose an encoder, and start encoding. The interface intelligently adapts based on the selected media type.
 
 ## Quick Start
 
