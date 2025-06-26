@@ -39,6 +39,7 @@ The `gui` directory contains all code related to the graphical user interface, b
 -   `advanced_filters_window.py`: Defines the `AdvancedFiltersWindow` class for configuring complex FFmpeg video/audio filters.
 -   `audio_tracks_window.py`: Defines the `AudioTracksWindow` class for managing audio track selection and configuration for encoding jobs.
 -   `folder_watcher.py`: Implements folder watching functionality (`FolderWatcher` class using `watchdog`) to automatically add files to the queue when they appear in a specified input directory.
+-   `merge_videos_window.py`: Defines the `MergeVideosWindow` class, providing a UI for selecting multiple video files and merging them into a single output file using `ffmpeg` (stream copy).
 
 ## Main Application
 
@@ -60,4 +61,5 @@ The `gui` directory contains all code related to the graphical user interface, b
 -   **Drag and Drop**: Adding files/folders via drag and drop.
 -   **Folder Watching**: Automatically processing files added to a monitored folder.
 -   **Advanced Filtering & Audio Track Selection**: Fine-grained control over video and audio processing.
+-   `Video Merging`: Combining multiple video files into one, using stream copy for speed.
 ```

@@ -11,7 +11,7 @@ import tkinter as tk
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from core.encode_job import EncodeJob
-from core.ffmpeg_helpers import get_media_info
+# from core.ffmpeg_helpers import get_media_info # This import causes an error and is not used
 from core.ffmpeg_helpers import FFmpegHelpers
 from core.settings import Settings
 from core.worker_pool import WorkerPool
@@ -298,16 +298,24 @@ class MainWindow:
             # Sur macOS, event.delta est le nombre de "lignes" à faire défiler.
             # Sur Linux, on utilise Button-4 et Button-5.
             
-            # Pour macOS et Windows (event.delta)
-            if hasattr(event, 'delta') and event.delta != 0:
-                self.settings_canvas.yview_scroll(-1 * (event.delta // 120) if sys.platform == 'win32' else -1 * event.delta, "units")
-
-            # Pour Linux (event.num)
-            elif hasattr(event, 'num'):
+            if sys.platform == "darwin": # Explicitly for macOS
+                # event.delta for macOS trackpad can be small, continuous values.
+                # Negative delta for scrolling up, positive for scrolling down.
+                # yview_scroll positive for down, negative for up.
+                # Add a print statement to debug delta values on macOS
+                # print(f"macOS scroll delta: {event.delta}")
+                self.settings_canvas.yview_scroll(int(-1 * event.delta), "units")
+            elif sys.platform == "win32": # Windows
+                self.settings_canvas.yview_scroll(-1 * (event.delta // 120), "units")
+            # For Linux (event.num)
+            elif hasattr(event, 'num'): # Check for event.num for Linux
                 if event.num == 4:
                     self.settings_canvas.yview_scroll(-1, "units")
                 elif event.num == 5:
                     self.settings_canvas.yview_scroll(1, "units")
+            # Fallback for other <MouseWheel> events that might have .delta
+            elif hasattr(event, 'delta') and event.delta != 0:
+                 self.settings_canvas.yview_scroll(int(-1 * event.delta), "units")
 
         def bind_to_mousewheel(widget):
             widget.bind("<MouseWheel>", _on_mousewheel)
@@ -1671,6 +1679,21 @@ class MainWindow:
         return display_text.split(' - ')[0] if ' - ' in display_text else display_text
 
     def _get_codec_from_display(self, display_text: str) -> str:
+        """Obtient le vrai nom du codec à partir du texte affiché dans le combobox."""
+        if not display_text:
+            return ""
+        # _current_codec_choices is populated in _update_codec_choices with (display_name, actual_codec_name) tuples
+        if hasattr(self, '_current_codec_choices') and self._current_codec_choices:
+            for display, codec_val in self._current_codec_choices:
+                if display == display_text:
+                    return codec_val
+
+        # Fallback: This part is reached if display_text is not found in _current_codec_choices.
+        # This could happen if a preset is loaded with a display name not currently in the generated list,
+        # or if the initial state of global_codec_var is not one of the display names.
+        # The original simple split is kept as a last resort.
+        # Consider logging a warning here if this fallback is used frequently.
+        # print(f"Warning: Codec display text '{display_text}' not found in _current_codec_choices. Using fallback split.")
         return display_text.split(" (")[0]
 
     def _build_ffmpeg_command(self, job: EncodeJob) -> list[str]:
@@ -2800,13 +2823,19 @@ class MainWindow:
         # Bind mousewheel pour le scrolling
         def _on_mousewheel(event):
             # La direction et l'amplitude du défilement varient selon la plateforme
-            if hasattr(event, 'delta') and event.delta != 0:
-                canvas.yview_scroll(-1 * (event.delta // 120) if sys.platform == 'win32' else -1 * event.delta, "units")
-            elif hasattr(event, 'num'):
+            if sys.platform == "darwin": # Explicitly for macOS
+                # Add a print statement to debug delta values on macOS
+                # print(f"macOS inspector scroll delta: {event.delta}")
+                canvas.yview_scroll(int(-1 * event.delta), "units")
+            elif sys.platform == "win32": # Windows
+                canvas.yview_scroll(-1 * (event.delta // 120), "units")
+            elif hasattr(event, 'num'): # Linux
                 if event.num == 4:
                     canvas.yview_scroll(-1, "units")
                 elif event.num == 5:
                     canvas.yview_scroll(1, "units")
+            elif hasattr(event, 'delta') and event.delta != 0: # Fallback
+                 canvas.yview_scroll(int(-1 * event.delta), "units")
 
         canvas.bind("<MouseWheel>", _on_mousewheel)
         canvas.bind("<Button-4>", _on_mousewheel)
