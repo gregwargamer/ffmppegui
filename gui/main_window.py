@@ -40,12 +40,85 @@ except ImportError:
 
 # Ajout des imports pour watchdog (surveillance de dossier)
 try:
-    from watchdog.observers import Observer
+    from watchdog.observers import Observer # type: ignore
     from watchdog.events import FileSystemEventHandler
 except ImportError:
     Observer = None
     class FileSystemEventHandler:
         pass
+
+class TransientInfoDialog(Toplevel):
+    def __init__(self, parent, title, message, auto_dismiss_ms=None):
+        super().__init__(parent)
+        self.title(title)
+        self.transient(parent) # Display on top of the parent window
+        # self.grab_set() # Make modal: this would prevent clicking outside. We want non-modal.
+
+        # Remove window decorations (title bar, close button) for a more "popup" feel
+        # self.overrideredirect(True) # This makes it hard to move/close if something goes wrong
+
+        main_frame = ttk.Frame(self, padding="10", style="InfoDialog.TFrame")
+        main_frame.pack(expand=True, fill=tk.BOTH)
+
+        ttk.Label(main_frame, text=message, wraplength=350, anchor="center").pack(padx=20, pady=10)
+
+        button_frame = ttk.Frame(main_frame, style="InfoDialog.TFrame")
+        button_frame.pack(pady=(0, 10))
+        ok_button = ttk.Button(button_frame, text="OK", command=self._dismiss_dialog, style="InfoDialog.TButton")
+        ok_button.pack()
+
+        # Style for the dialog (optional, but can make it look nicer)
+        s = ttk.Style()
+        s.configure("InfoDialog.TFrame", background="#f0f0f0") # Light gray background
+        s.configure("InfoDialog.TButton", padding=5)
+
+
+        # Center the dialog on the parent
+        self.update_idletasks() # Ensure dimensions are calculated
+        parent_x = parent.winfo_rootx()
+        parent_y = parent.winfo_rooty()
+        parent_width = parent.winfo_width()
+        parent_height = parent.winfo_height()
+
+        dialog_width = self.winfo_width()
+        dialog_height = self.winfo_height()
+
+        x = parent_x + (parent_width // 2) - (dialog_width // 2)
+        y = parent_y + (parent_height // 2) - (dialog_height // 2)
+        self.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
+
+        self.bind("<Escape>", lambda e: self._dismiss_dialog())
+
+        # This is the core of "click outside to dismiss"
+        # We bind to the entire application's root window for any click.
+        self._root_click_handler_id = parent.winfo_toplevel().bind("<Button-1>", self._handle_root_click, add="+")
+
+        if auto_dismiss_ms:
+            self._auto_dismiss_timer = self.after(auto_dismiss_ms, self._dismiss_dialog)
+
+        ok_button.focus_set()
+        # self.protocol("WM_DELETE_WINDOW", self._dismiss_dialog) # Handle window close button if not overrideredirect
+
+    def _handle_root_click(self, event):
+        # Check if the click was outside this dialog
+        # event.widget is the widget that was clicked.
+        # Check if the top-level window of the clicked widget is this dialog.
+        clicked_toplevel = event.widget.winfo_toplevel()
+        if clicked_toplevel != self:
+            self._dismiss_dialog()
+
+    def _dismiss_dialog(self):
+        if hasattr(self, '_auto_dismiss_timer'):
+            self.after_cancel(self._auto_dismiss_timer)
+
+        # Unbind the global click handler
+        if hasattr(self, '_root_click_handler_id'):
+            parent_toplevel = self.master.winfo_toplevel()
+            parent_toplevel.unbind("<Button-1>", self._root_click_handler_id)
+            delattr(self, '_root_click_handler_id') # Important to prevent errors if dismissed multiple ways
+
+        if self.winfo_exists(): # Check if window still exists before destroying
+            self.destroy()
 
 class MainWindow:
     def __init__(self, root):
@@ -56,6 +129,7 @@ class MainWindow:
         # Liste des jobs
         self.jobs: list[EncodeJob] = []
         self.job_rows = {}
+        self.last_import_job_ids: list[str] = [] # Store IDs of jobs from the last import operation
         
         # Variables d'état
         self.is_running = False
@@ -132,7 +206,8 @@ class MainWindow:
         
         # Section des paramètres d'encodage
         encoding_frame = ttk.LabelFrame(left_frame, text="Paramètres d'encodage", padding="10")
-        encoding_frame.pack(fill=tk.X, pady=(10, 0))
+        # Allow encoding_frame to expand vertically as well
+        encoding_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
         self._build_encoding_section(encoding_frame)
         
         # === Panneau droit supérieur: Queue des jobs ===
@@ -246,6 +321,7 @@ class MainWindow:
         # --- Variables d'état pour les paramètres ---
         self.selected_file_var = StringVar(value="No file selected")
         self.preset_name_var = StringVar()
+        self.selected_job_for_settings_var = StringVar() # For the new combobox
         self.resolution_var_settings = StringVar()
         self.crop_top_var = StringVar(value="0")
         self.crop_bottom_var = StringVar(value="0")
@@ -268,24 +344,32 @@ class MainWindow:
         # --- Cadre principal pour les réglages (avec scroll intelligent) ---
         # Créer un cadre avec scroll seulement si le contenu dépasse la hauteur
         canvas_frame = ttk.Frame(parent)
+        # Make canvas_frame expand vertically within its parent (encoding_frame)
         canvas_frame.pack(fill=tk.BOTH, expand=True)
         
         # Canvas et scrollbar pour scroll uniquement si nécessaire
-        self.settings_canvas = tk.Canvas(canvas_frame, highlightthickness=0, height=400)
+        # Remove fixed height, let it expand with canvas_frame
+        self.settings_canvas = tk.Canvas(canvas_frame, highlightthickness=0)
         scrollbar = ttk.Scrollbar(canvas_frame, orient="vertical", command=self.settings_canvas.yview)
+        # main_frame is the content frame INSIDE the canvas
         main_frame = ttk.Frame(self.settings_canvas)
         
         # Configuration du scroll
+        # When main_frame's size changes, update canvas scrollregion
         main_frame.bind('<Configure>', self._on_frame_configure)
+        # When settings_canvas's size changes, update main_frame's width and scroll state
         self.settings_canvas.bind('<Configure>', self._on_canvas_configure)
         
         # Créer la fenêtre dans le canvas
+        # This embeds main_frame into the canvas
         canvas_window = self.settings_canvas.create_window((0, 0), window=main_frame, anchor="nw")
         self.settings_canvas.configure(yscrollcommand=scrollbar.set)
         
         # Pack canvas et scrollbar
+        # Canvas should fill and expand
         self.settings_canvas.pack(side="left", fill="both", expand=True, padx=5, pady=5)
-        scrollbar.pack(side="right", fill="y")
+        # Scrollbar will be managed by _update_scroll_state
+        # scrollbar.pack(side="right", fill="y") # Initially hidden, shown by _update_scroll_state
         
         # Variables pour gérer le scroll intelligent
         self._canvas_window = canvas_window
@@ -319,8 +403,8 @@ class MainWindow:
 
         def bind_to_mousewheel(widget):
             widget.bind("<MouseWheel>", _on_mousewheel)
-            widget.bind("<Button-4>", _on_mousewheel)
-            widget.bind("<Button-5>", _on_mousewheel)
+            widget.bind("<Button-4>", _on_mousewheel) # For Linux scroll up
+            widget.bind("<Button-5>", _on_mousewheel) # For Linux scroll down
 
         # Lier l'événement de la molette au canvas et au frame principal
         bind_to_mousewheel(self.settings_canvas)
@@ -339,6 +423,22 @@ class MainWindow:
         
 
         # --- Structure de l'UI ---
+
+        # 0. File Selector and Apply Buttons
+        file_apply_frame = ttk.Frame(main_frame, padding="5")
+        file_apply_frame.pack(fill=tk.X, pady=(5, 5))
+
+        ttk.Label(file_apply_frame, text="Fichier à configurer:").pack(side=tk.LEFT, padx=(0, 5))
+        self.job_selector_combobox = ttk.Combobox(file_apply_frame, textvariable=self.selected_job_for_settings_var, state="readonly", width=40)
+        self.job_selector_combobox.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0,10))
+        self.job_selector_combobox.bind("<<ComboboxSelected>>", self._on_job_selected_for_settings_change)
+
+        self.apply_settings_btn = ttk.Button(file_apply_frame, text="Appliquer", command=self._apply_ui_settings_to_selected_job_via_combobox)
+        self.apply_settings_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+        self.apply_to_last_batch_btn = ttk.Button(file_apply_frame, text="Appliquer au dernier import", command=self._apply_ui_settings_to_last_import_batch)
+        self.apply_to_last_batch_btn.pack(side=tk.LEFT)
+
 
         # 1. Préréglages (Presets)
         preset_frame = ttk.LabelFrame(main_frame, text="Préréglage", padding="5")
@@ -794,6 +894,8 @@ class MainWindow:
         keep_structure = Settings.data.get("keep_folder_structure", True)
         input_folder = self.input_folder.get()
         
+        current_batch_job_ids = []
+
         for p in paths:
             mode = self._detect_mode(p)
             if self.global_type_var.get() == "unknown":
@@ -891,10 +993,16 @@ class MainWindow:
             else:
                 job.encoder = Settings.data.get("default_image_encoder")
             self.jobs.append(job)
-            self.tree.insert("", "end", iid=str(id(job)), values=(p.name, "-", "-", "0%", "pending"))
-            self.job_rows[str(id(job))] = {"job": job}
+            job_internal_id = str(id(job))
+            self.tree.insert("", "end", iid=job_internal_id, values=(p.name, "-", "-", "0%", "pending"))
+            self.job_rows[job_internal_id] = {"job": job}
+            current_batch_job_ids.append(job_internal_id)
             # do not submit yet; submission happens when user presses Start Encoding
         
+        if current_batch_job_ids:
+            self.last_import_job_ids = current_batch_job_ids
+
+        self._update_job_selector_combobox() # Update the new combobox
         self._update_inspector_file_list()
         # Mettre à jour l'état des boutons après avoir ajouté des jobs
         if not any(j.status in ["running", "paused"] for j in self.jobs):
@@ -953,7 +1061,9 @@ class MainWindow:
             
         # Importer tous les fichiers trouvés
         self._enqueue_paths(all_files)
-        messagebox.showinfo("Files Imported", f"Successfully imported {len(all_files)} media files from:\n{folder}")
+        # Use the new TransientInfoDialog
+        dialog_message = f"Successfully imported {len(all_files)} media files from:\n{folder}"
+        TransientInfoDialog(self.root, "Files Imported", dialog_message, auto_dismiss_ms=7000) # Auto-dismiss after 7s
 
     def _select_output_folder(self):
         folder = filedialog.askdirectory(title="Select output folder")
@@ -1850,6 +1960,245 @@ class MainWindow:
         
         return cmd
 
+    def _update_job_selector_combobox(self):
+        """Updates the job selector combobox with current job filenames."""
+        job_filenames = [self.job_rows[job_id]["job"].src_path.name for job_id in sorted(self.job_rows.keys())] # Keep order consistent
+        current_selection = self.selected_job_for_settings_var.get()
+
+        self.job_selector_combobox['values'] = job_filenames
+        if job_filenames:
+            if current_selection in job_filenames:
+                self.selected_job_for_settings_var.set(current_selection) # Keep current selection if still valid
+            else:
+                self.selected_job_for_settings_var.set(job_filenames[0]) # Default to first
+            self._load_settings_for_selected_job_from_combobox()
+        else:
+            self.selected_job_for_settings_var.set("")
+            self._clear_encoding_settings_ui(reset_to_defaults=True)
+
+
+    def _clear_encoding_settings_ui(self, reset_to_defaults=False):
+        """Clears or resets the encoding settings UI."""
+        if reset_to_defaults:
+            # Attempt to load a default preset or clear to app defaults
+            # This is a simplified reset. A full reset might involve calling _load_preset with a default preset name.
+            self.preset_name_var.set("") # Clear preset selection
+            self.global_type_var.set("video")
+            self.resolution_var_settings.set("Keep Original")
+            self.crop_top_var.set("0")
+            self.crop_bottom_var.set("0")
+            self.crop_left_var.set("0")
+            self.crop_right_var.set("0")
+            self.container_var.set("") # Will be set by codec change
+            self.global_codec_var.set("") # Will be set by _update_codec_choices
+            self.global_encoder_var.set("") # Will be set by _on_codec_change
+            self.video_mode_var.set("quality")
+            self.quality_var.set(Settings.data.get("default_cq", "22"))
+            self.cq_var.set(Settings.data.get("default_cq", "22"))
+            self.preset_var.set(Settings.data.get("default_preset", "medium"))
+            self.bitrate_var.set(Settings.data.get("default_bitrate", "4000"))
+            self.multipass_var.set(False)
+            self.custom_flags_var.set("")
+            self.subtitle_mode_var.set("copy")
+            self.subtitle_path_var.set("")
+            self.trim_start_var.set("00:00:00")
+            self.trim_end_var.set("00:00:00")
+            self.tonemap_var.set(False)
+            self.preserve_hdr_var.set(True)
+            self._update_codec_choices() # This will trigger chain updates for encoder, container, quality presets
+            self._on_video_mode_change()
+            self._on_tonemap_change()
+            self._on_subtitle_mode_change()
+        else:
+            # Just clear the fields if not resetting to full defaults (e.g., if no jobs left)
+            self.selected_job_for_settings_var.set("")
+            # Optionally clear other fields or leave them as is
+            # For now, if no jobs, we reset to defaults via the call in _update_job_selector_combobox
+
+    def _on_job_selected_for_settings_change(self, event=None):
+        """Called when a job is selected in the settings combobox."""
+        self._load_settings_for_selected_job_from_combobox()
+
+    def _load_settings_for_selected_job_from_combobox(self):
+        """Loads the settings from the job selected in the combobox into the UI."""
+        selected_filename = self.selected_job_for_settings_var.get()
+        if not selected_filename:
+            # Potentially clear UI or set to default if no file is selected in combobox
+            # self._clear_encoding_settings_ui(reset_to_defaults=True)
+            return
+
+        target_job = None
+        for job_id, job_data in self.job_rows.items():
+            if job_data["job"].src_path.name == selected_filename:
+                target_job = job_data["job"]
+                break
+
+        if target_job:
+            self._load_settings_for_job(target_job)
+            # Also update the main queue selection to match
+            job_internal_id = str(id(target_job))
+            if self.tree.exists(job_internal_id) and job_internal_id not in self.tree.selection():
+                self.tree.selection_set(job_internal_id)
+                self.tree.focus(job_internal_id)
+                self.tree.see(job_internal_id)
+
+
+    def _load_settings_for_job(self, job: EncodeJob):
+        """Loads a job's settings into the encoding UI."""
+        # Ensure media type is set first as it drives other UI updates
+        self.global_type_var.set(job.mode or "video")
+        self._update_media_type_ui(job.mode or "video") # Update visibility of sections
+        self._update_codec_choices() # This populates codec choices and triggers encoder/container updates
+
+        # Set Codec
+        codec_display_name = job.codec
+        # Find the display name that corresponds to job.codec value
+        for display, codec_val in getattr(self, '_current_codec_choices', []):
+            if codec_val == job.codec:
+                codec_display_name = display
+                break
+        self.global_codec_var.set(codec_display_name) # This will trigger _on_codec_change -> _update_encoder_choices
+
+        # Set Encoder - wait for global_codec_var.set to populate encoder choices
+        def set_encoder_after_codec_update():
+            encoder_display_name = job.encoder
+            # Check current mapping (populated by _update_encoder_choices)
+            current_encoder_map = getattr(self, '_current_encoder_mapping', {})
+            found_encoder = False
+            for display, encoder_val_map in current_encoder_map.items():
+                if encoder_val_map == job.encoder:
+                    encoder_display_name = display
+                    found_encoder = True
+                    break
+
+            if not found_encoder: # Fallback: if not in map, try to find by name in combobox values
+                for enc_combo_val in self.global_encoder_combo['values']:
+                    if enc_combo_val.startswith(job.encoder): # e.g., 'libx264' matches 'libx264 - H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10'
+                        encoder_display_name = enc_combo_val
+                        break
+            self.global_encoder_var.set(encoder_display_name) # This will trigger _on_encoder_change -> _update_quality_preset_controls
+
+            # Set Container - after codec/encoder might have influenced it
+            container_display_name = job.container
+            for display, container_val in getattr(self, '_current_container_choices', []):
+                if container_val == job.container: # Assuming job.container stores the extension like 'mp4'
+                    container_display_name = display
+                    break
+            self.container_var.set(container_display_name)
+
+
+            # Video Quality Settings
+            self.video_mode_var.set(job.video_mode or "quality")
+            self.quality_var.set(job.quality or Settings.data.get("default_cq", "22") )
+            self.cq_var.set(job.cq_value or Settings.data.get("default_cq", "22"))
+            self.bitrate_var.set(job.bitrate.replace('k', '') if job.bitrate else Settings.data.get("default_bitrate", "4000"))
+            self.multipass_var.set(job.multipass or False)
+            self.preset_var.set(job.preset or Settings.data.get("default_preset", "medium")) # This should be updated by _update_quality_preset_controls too
+
+            # Resolution and Crop
+            res_w = job.filters.get("scale_width", 0)
+            res_h = job.filters.get("scale_height", 0)
+            if res_w and res_h:
+                res_str_exact = f"{res_w}x{res_h}"
+                found_res_display = False
+                for r_choice in self.resolution_combo['values']: # Assuming self.resolution_combo is the correct combobox
+                    if res_str_exact in r_choice.split(' ')[0]: # Check "1920x1080" part of "1920x1080 (1080p)"
+                        self.resolution_var_settings.set(r_choice)
+                        found_res_display = True
+                        break
+                if not found_res_display:
+                    # If not found, set to custom and potentially update custom fields if they exist
+                    self.resolution_var_settings.set("Custom")
+                    # If you add custom width/height StringVars:
+                    # self.custom_width_var.set(str(res_w))
+                    # self.custom_height_var.set(str(res_h))
+            else:
+                self.resolution_var_settings.set("Keep Original")
+
+            self.crop_top_var.set(str(job.filters.get("crop_top", 0)))
+            self.crop_bottom_var.set(str(job.filters.get("crop_bottom", 0)))
+            self.crop_left_var.set(str(job.filters.get("crop_left", 0)))
+            self.crop_right_var.set(str(job.filters.get("crop_right", 0)))
+
+            self.custom_flags_var.set(job.custom_flags or "")
+
+            # Subtitles
+            self.subtitle_mode_var.set(job.subtitle_config.get("mode", "copy"))
+            self.subtitle_path_var.set(job.subtitle_config.get("external_path", ""))
+            self._on_subtitle_mode_change()
+
+            # Trimming
+            self.trim_start_var.set(job.trim_config.get("start", "00:00:00"))
+            self.trim_end_var.set(job.trim_config.get("end", "00:00:00"))
+
+            # HDR - These are typically derived from probing the source.
+            # If job object stores specific HDR intent for output, load it here.
+            # For now, assume they reflect the current state of the global UI vars,
+            # which should be updated by probing when a file is selected in inspector.
+            # self.tonemap_var.set(job.tonemap_settings.get("enabled", False))
+            # self.tonemap_method_var.set(job.tonemap_settings.get("method", "hable"))
+            # self.preserve_hdr_var.set(job.hdr_settings.get("preserve", True))
+
+            self._on_video_mode_change() # Ensure CQ/Bitrate fields visibility
+            self._on_tonemap_change()    # Ensure tonemap method field state
+
+            # Load preset name if these settings match a known preset
+            # This is complex; for now, we don't try to guess the preset name.
+            self.preset_name_var.set("") # Clear preset selection, as we've loaded specific job settings
+
+        # Schedule the encoder and container setting after a short delay
+        # to allow Tkinter to process the codec combobox update and its dependent callbacks.
+        self.root.after(50, set_encoder_after_codec_update)
+
+
+    def _apply_ui_settings_to_selected_job_via_combobox(self):
+        """Applies current UI settings to the job selected in the combobox."""
+        selected_filename = self.selected_job_for_settings_var.get()
+        if not selected_filename:
+            messagebox.showwarning("Aucune sélection", "Veuillez sélectionner un fichier dans la liste déroulante pour appliquer les paramètres.")
+            return
+
+        target_job = None
+        job_id_to_update = None
+        for job_id, job_data in self.job_rows.items():
+            if job_data["job"].src_path.name == selected_filename:
+                target_job = job_data["job"]
+                job_id_to_update = job_id
+                break
+
+        if target_job:
+            self._apply_ui_settings_to_job(target_job)
+            self._update_job_row(target_job)
+            messagebox.showinfo("Paramètres appliqués", f"Les paramètres d'encodage actuels ont été appliqués à :\n{selected_filename}")
+        else:
+            messagebox.showerror("Erreur", "Impossible de trouver le job sélectionné pour appliquer les paramètres.")
+
+    def _apply_ui_settings_to_last_import_batch(self):
+        """Applies current UI settings to all jobs from the last import operation."""
+        if not self.last_import_job_ids:
+            messagebox.showinfo("Aucun import récent", "Aucun fichier dans le dernier lot d'import.")
+            return
+
+        confirmed = messagebox.askyesno("Appliquer au dernier import",
+                                        f"Voulez-vous appliquer les paramètres d'encodage actuels aux {len(self.last_import_job_ids)} fichier(s) du dernier import ?",
+                                        icon='question')
+        if not confirmed:
+            return
+
+        num_applied = 0
+        for job_id_str in self.last_import_job_ids:
+            if job_id_str in self.job_rows:
+                job_to_update = self.job_rows[job_id_str]["job"]
+                self._apply_ui_settings_to_job(job_to_update)
+                self._update_job_row(job_to_update)
+                num_applied += 1
+
+        if num_applied > 0:
+            messagebox.showinfo("Paramètres appliqués", f"Les paramètres d'encodage ont été appliqués à {num_applied} fichier(s) du dernier import.")
+        else:
+            messagebox.showwarning("Aucun fichier affecté", "Aucun fichier du dernier import n'a pu être mis à jour. Le lot était peut-être vide ou les fichiers ont été retirés.")
+
+
     def _start_encoding(self):
         if self.is_running:
             messagebox.showwarning("Already Running", "Encoding is already in progress.")
@@ -2079,6 +2428,7 @@ class MainWindow:
         self.progress_bar['value'] = 0
         self.job_rows.clear()
         self._update_inspector_file_list()
+        self._update_job_selector_combobox() # Update the settings combobox
         
         # Remettre les boutons à l'état idle
         self._update_control_buttons_state("idle")
@@ -2131,6 +2481,7 @@ class MainWindow:
                 self.tree.delete(selected[0])
                 self.job_rows.pop(selected[0], None)
                 self._update_inspector_file_list()
+                self._update_job_selector_combobox() # Update the settings combobox
                 
                 # Mettre à jour l'état des boutons si aucun job n'est actif
                 if not any(j.status in ["running", "paused"] for j in self.jobs):
@@ -2440,14 +2791,36 @@ class MainWindow:
         selection = self.tree.selection()
         if not selection:
             self._clear_inspector()
+            # Optionally clear settings UI or select "nothing" in the job_selector_combobox
+            # self.selected_job_for_settings_var.set("")
+            # self._clear_encoding_settings_ui(reset_to_defaults=True)
             return
         
-        job_id = selection[0]
+        job_id = selection[0] # This is the internal ID string from str(id(job))
         
-        # Select the same item in the inspector tree
+        # Update the inspector tree selection (if it exists)
         if self.inspector_tree.exists(job_id):
             self.inspector_tree.selection_set(job_id)
             self.inspector_tree.focus(job_id)
+            # _on_inspector_selection_change will be called by this selection,
+            # which then calls _run_probe_and_update_inspector
+
+        # Update the new job selector combobox and load settings into UI
+        if job_id in self.job_rows:
+            selected_job_object = self.job_rows[job_id]["job"]
+            selected_filename = selected_job_object.src_path.name
+
+            # Set the combobox value without triggering its own callback if possible,
+            # or ensure the callback handles re-entrancy or no-change gracefully.
+            if self.selected_job_for_settings_var.get() != selected_filename:
+                self.selected_job_for_settings_var.set(selected_filename)
+
+            self._load_settings_for_job(selected_job_object)
+        else:
+            # Job ID from tree not in job_rows, something is out of sync
+            # self.selected_job_for_settings_var.set("")
+            # self._clear_encoding_settings_ui(reset_to_defaults=True)
+            pass
     
     def _on_inspector_selection_change(self, event=None):
         selection = self.inspector_tree.selection()
@@ -2908,7 +3281,12 @@ class MainWindow:
         """Génère et affiche une image de prévisualisation avec les filtres actuels."""
         selected_item = self.tree.selection()
         if not selected_item:
-            messagebox.showwarning("No Selection", "Please select a job to preview.")
+            # Clear preview or show placeholder text directly in the preview label
+            if hasattr(self, 'preview_image_label'):
+                # Assuming preview_image_label can display text
+                self.preview_image_label.config(image=None, text="Sélectionnez un job pour l'aperçu.")
+                if hasattr(self.preview_image_label, 'image'):
+                    self.preview_image_label.image = None # Clear previous image reference
             return
 
         job = next((j for j in self.jobs if str(id(j)) == selected_item[0]), None)
