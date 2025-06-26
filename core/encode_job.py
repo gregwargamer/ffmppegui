@@ -53,6 +53,25 @@ class EncodeJob:
             "audio_bitrate": "128k"
         }
 
+        # Configuration des sous-titres
+        self.subtitle_config = {
+            "mode": "copy",  # copy, burn, remove, add
+            "external_path": None, # Chemin vers le fichier de sous-titres externe
+            "burn_track": -1 # Index de la piste à incruster
+        }
+
+        # Configuration du découpage
+        self.trim_config = {
+            "start": "",  # HH:MM:SS ou secondes
+            "end": ""     # HH:MM:SS ou secondes
+        }
+
+        # Configuration pour la création de GIF
+        self.gif_config = {
+            "fps": 15,
+            "use_palette": True
+        }
+
     def cancel(self):
         """Annule le job et termine le processus FFmpeg"""
         self.is_cancelled = True

@@ -4,4 +4,5 @@ psutil>=5.9.0
 ffmpeg-python==0.2.0
 tkinterdnd2==0.3.0
 Pillow
-watchdog 
+watchdog
+yt-dlp 

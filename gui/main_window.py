@@ -2,11 +2,16 @@ import json
 import os
 import subprocess
 import threading
+import sys
 from pathlib import Path
-from tkinter import (Tk, filedialog, ttk, Menu, messagebox, StringVar, BooleanVar, Text, Toplevel, IntVar, DoubleVar)
+from tkinter import (Tk, filedialog, ttk, Menu, messagebox, StringVar, BooleanVar, Text, Toplevel, IntVar, DoubleVar, simpledialog, Listbox, Scrollbar, Frame, Canvas, Checkbutton)
 import tkinter as tk
 
+#j'ajoute dynamiquement le chemin racine du projet au PYTHONPATH
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from core.encode_job import EncodeJob
+from core.ffmpeg_helpers import get_media_info
 from core.ffmpeg_helpers import FFmpegHelpers
 from core.settings import Settings
 from core.worker_pool import WorkerPool
@@ -16,6 +21,7 @@ from gui.log_viewer_window import LogViewerWindow
 from gui.batch_operations_window import BatchOperationsWindow
 from gui.advanced_filters_window import AdvancedFiltersWindow
 from gui.audio_tracks_window import AudioTracksWindow
+from gui.folder_watcher import FolderWatcher
 
 
 try:
@@ -60,6 +66,17 @@ class MainWindow:
         self.watch_var = BooleanVar(value=False)
         self.log_viewer = None
         
+        # Variables manquantes qui causent des erreurs
+        self.cq_var = StringVar(value="22")
+        self.trim_start_var = StringVar(value="00:00:00")
+        self.trim_end_var = StringVar(value="00:00:00")
+        
+        # Variables HDR
+        self.hdr_detected_var = BooleanVar(value=False)
+        self.tonemap_var = BooleanVar(value=False)
+        self.tonemap_method_var = StringVar(value="hable")
+        self.preserve_hdr_var = BooleanVar(value=True)
+        
         # Variables pour l'inspecteur média
         self.resolution_var = StringVar(value="N/A")
         self.duration_var = StringVar(value="N/A")
@@ -68,6 +85,9 @@ class MainWindow:
         self.acodec_var = StringVar(value="N/A")
         self.abitrate_var = StringVar(value="N/A")
         self.achannels_var = StringVar(value="N/A")
+        
+        # Action post-encodage
+        self.post_encode_action_var = StringVar(value="rien")
         
         # Pool de workers
         self.pool = WorkerPool(
@@ -81,10 +101,518 @@ class MainWindow:
         self._setup_drag_drop()
         self._update_preset_list()
         
+        # Initialiser les valeurs par défaut après que tous les éléments UI soient créés
+        try:
+            self._update_codec_choices()
+        except Exception:
+            # Ignorer les erreurs d'initialisation pour l'instant
+            pass
+        
         # Démarrer le pool
         self.pool.start()
 
     # === GUI construction ===
+    def _build_layout(self):
+        """Construit l'interface utilisateur principale"""
+        # Création du layout principal avec des panneaux
+        main_paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
+        main_paned.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Panneau gauche pour les paramètres
+        left_frame = ttk.Frame(main_paned)
+        main_paned.add(left_frame, weight=1)
+        
+        # Panneau droit pour la queue et l'inspecteur
+        right_paned = ttk.PanedWindow(main_paned, orient=tk.VERTICAL)
+        main_paned.add(right_paned, weight=2)
+        
+        # === Panneau gauche: Paramètres ===
+        # Section de sélection des fichiers
+        self._build_file_section(left_frame)
+        
+        # Section des paramètres d'encodage
+        encoding_frame = ttk.LabelFrame(left_frame, text="Paramètres d'encodage", padding="10")
+        encoding_frame.pack(fill=tk.X, pady=(10, 0))
+        self._build_encoding_section(encoding_frame)
+        
+        # === Panneau droit supérieur: Queue des jobs ===
+        queue_frame = ttk.LabelFrame(right_paned, text="Queue d'encodage", padding="5")
+        right_paned.add(queue_frame, weight=3)
+        
+        # Treeview pour la queue
+        tree_frame = ttk.Frame(queue_frame)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Colonnes du treeview
+        columns = ("Fichier", "Codec", "Qualité", "Progrès", "Statut")
+        self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", height=10)
+        
+        # Configuration des colonnes
+        for col in columns:
+            self.tree.heading(col, text=col)
+            if col == "Fichier":
+                self.tree.column(col, width=200)
+            elif col == "Progrès":
+                self.tree.column(col, width=80)
+            else:
+                self.tree.column(col, width=100)
+        
+        # Scrollbars pour le treeview
+        tree_scrollbar_v = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        tree_scrollbar_h = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
+        self.tree.configure(yscrollcommand=tree_scrollbar_v.set, xscrollcommand=tree_scrollbar_h.set)
+        
+        # Pack du treeview et des scrollbars
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tree_scrollbar_v.pack(side=tk.RIGHT, fill=tk.Y)
+        tree_scrollbar_h.pack(side=tk.BOTTOM, fill=tk.X)
+        
+        # Liaisons d'événements pour le treeview
+        self.tree.bind("<Double-1>", self._on_double_click)
+        self.tree.bind("<Button-3>", self._on_right_click)  # Clic droit
+        self.tree.bind("<<TreeviewSelect>>", self._on_queue_selection_change)
+        
+        # Boutons de contrôle
+        control_frame = ttk.Frame(queue_frame)
+        control_frame.pack(fill=tk.X, pady=(5, 0))
+        
+        self.start_btn = ttk.Button(control_frame, text="Démarrer", command=self._start_encoding, state="disabled")
+        self.start_btn.pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.pause_btn = ttk.Button(control_frame, text="Pause All", command=self._pause_all, state="disabled")
+        self.pause_btn.pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.resume_btn = ttk.Button(control_frame, text="Resume All", command=self._resume_all, state="disabled")
+        self.resume_btn.pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.cancel_btn = ttk.Button(control_frame, text="Cancel All", command=self._cancel_all, state="disabled")
+        self.cancel_btn.pack(side=tk.LEFT, padx=(0, 5))
+        
+        ttk.Button(control_frame, text="Clear Queue", command=self._clear_queue).pack(side=tk.LEFT)
+        
+        # Menu contextuel pour la queue
+        self.context_menu = Menu(self.root, tearoff=0)
+        self.context_menu.add_command(label="Modifier", command=self._edit_selected_job)
+        self.context_menu.add_command(label="Dupliquer", command=self._duplicate_selected)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="Pause", command=self._pause_selected_job)
+        self.context_menu.add_command(label="Resume", command=self._resume_selected_job)
+        self.context_menu.add_command(label="Cancel", command=self._cancel_selected_job)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="Supprimer", command=self._remove_selected_job)
+        
+        # Barre de progression globale
+        progress_frame = ttk.Frame(queue_frame)
+        progress_frame.pack(fill=tk.X, pady=(5, 0))
+        ttk.Label(progress_frame, text="Progrès global:").pack(side=tk.LEFT)
+        self.progress_bar = ttk.Progressbar(progress_frame, mode='determinate')
+        self.progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
+        
+        # === Panneau droit inférieur: Inspecteur ===
+        inspector_frame = ttk.LabelFrame(right_paned, text="Inspecteur de média", padding="5")
+        right_paned.add(inspector_frame, weight=2)
+        
+        # Treeview pour la sélection de fichier dans l'inspecteur
+        inspector_tree_frame = ttk.Frame(inspector_frame)
+        inspector_tree_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Label(inspector_tree_frame, text="Fichier:").pack(side=tk.LEFT)
+        self.inspector_tree = ttk.Treeview(inspector_tree_frame, columns=("name",), show="headings", height=3)
+        self.inspector_tree.heading("name", text="Nom du fichier")
+        self.inspector_tree.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
+        
+        # Frame pour les informations du média
+        self.inspector_info_frame = ttk.Frame(inspector_frame)
+        self.inspector_info_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Menu contextuel pour la queue
+        self.context_menu = Menu(self.root, tearoff=0)
+        self.context_menu.add_command(label="Edit Job", command=self._edit_selected_job)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="Pause", command=self._pause_selected_job)
+        self.context_menu.add_command(label="Resume", command=self._resume_selected_job)
+        self.context_menu.add_command(label="Cancel", command=self._cancel_selected_job)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="Remove", command=self._remove_selected_job)
+        
+        # Binding des événements
+        self.tree.bind("<Double-1>", self._on_double_click)
+        self.tree.bind("<Button-3>", self._on_right_click)
+        self.tree.bind("<<TreeviewSelect>>", self._on_queue_selection_change)
+        self.inspector_tree.bind("<<TreeviewSelect>>", self._on_inspector_selection_change)
+
+    def _build_encoding_section(self, parent):
+        """Construit la section des paramètres d'encodage de manière plus logique."""
+        # --- Variables d'état pour les paramètres ---
+        self.selected_file_var = StringVar(value="No file selected")
+        self.preset_name_var = StringVar()
+        self.resolution_var_settings = StringVar()
+        self.crop_top_var = StringVar(value="0")
+        self.crop_bottom_var = StringVar(value="0")
+        self.crop_left_var = StringVar(value="0")
+        self.crop_right_var = StringVar(value="0")
+        self.global_type_var = StringVar(value="video")
+        self.global_codec_var = StringVar()
+        self.global_encoder_var = StringVar()
+        self.container_var = StringVar()
+        self.video_mode_var = StringVar(value="quality")
+        self.quality_var = StringVar(value="22")
+        self.preset_var = StringVar(value="medium")
+        self.bitrate_var = StringVar(value="4000")
+        self.multipass_var = BooleanVar(value=False)
+        self.custom_flags_var = StringVar()
+        self.timestamp_var = StringVar(value="00:00:10")
+        self.subtitle_mode_var = StringVar(value="copy")
+        self.subtitle_path_var = StringVar()
+
+        # --- Cadre principal pour les réglages (avec scroll intelligent) ---
+        # Créer un cadre avec scroll seulement si le contenu dépasse la hauteur
+        canvas_frame = ttk.Frame(parent)
+        canvas_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Canvas et scrollbar pour scroll uniquement si nécessaire
+        self.settings_canvas = tk.Canvas(canvas_frame, highlightthickness=0, height=400)
+        scrollbar = ttk.Scrollbar(canvas_frame, orient="vertical", command=self.settings_canvas.yview)
+        main_frame = ttk.Frame(self.settings_canvas)
+        
+        # Configuration du scroll
+        main_frame.bind('<Configure>', self._on_frame_configure)
+        self.settings_canvas.bind('<Configure>', self._on_canvas_configure)
+        
+        # Créer la fenêtre dans le canvas
+        canvas_window = self.settings_canvas.create_window((0, 0), window=main_frame, anchor="nw")
+        self.settings_canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Pack canvas et scrollbar
+        self.settings_canvas.pack(side="left", fill="both", expand=True, padx=5, pady=5)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Variables pour gérer le scroll intelligent
+        self._canvas_window = canvas_window
+        self._scrollbar = scrollbar
+        
+        # Configurer le scrolling avec la molette
+        def _on_mousewheel(event):
+            # La direction et l'amplitude du défilement varient selon la plateforme
+            # Sur Windows, event.delta est un multiple de 120.
+            # Sur macOS, event.delta est le nombre de "lignes" à faire défiler.
+            # Sur Linux, on utilise Button-4 et Button-5.
+            
+            # Pour macOS et Windows (event.delta)
+            if hasattr(event, 'delta') and event.delta != 0:
+                self.settings_canvas.yview_scroll(-1 * (event.delta // 120) if sys.platform == 'win32' else -1 * event.delta, "units")
+
+            # Pour Linux (event.num)
+            elif hasattr(event, 'num'):
+                if event.num == 4:
+                    self.settings_canvas.yview_scroll(-1, "units")
+                elif event.num == 5:
+                    self.settings_canvas.yview_scroll(1, "units")
+
+        def bind_to_mousewheel(widget):
+            widget.bind("<MouseWheel>", _on_mousewheel)
+            widget.bind("<Button-4>", _on_mousewheel)
+            widget.bind("<Button-5>", _on_mousewheel)
+
+        # Lier l'événement de la molette au canvas et au frame principal
+        bind_to_mousewheel(self.settings_canvas)
+        bind_to_mousewheel(main_frame)
+
+        # Quand le curseur entre dans le canvas, il prend le focus pour le scroll
+        self.settings_canvas.bind("<Enter>", lambda e: self.settings_canvas.focus_set())
+        
+        # Lier récursivement la molette à tous les widgets enfants
+        def bind_recursive(widget):
+            bind_to_mousewheel(widget)
+            for child in widget.winfo_children():
+                bind_recursive(child)
+        
+        main_frame.after(100, lambda: bind_recursive(main_frame))
+        
+
+        # --- Structure de l'UI ---
+
+        # 1. Préréglages (Presets)
+        preset_frame = ttk.LabelFrame(main_frame, text="Préréglage", padding="5")
+        preset_frame.pack(fill=tk.X, pady=(0, 5))
+        self.preset_combo = ttk.Combobox(preset_frame, textvariable=self.preset_name_var, state="readonly")
+        self.preset_combo.pack(fill=tk.X, expand=True)
+        self.preset_combo.bind("<<ComboboxSelected>>", self._load_preset)
+
+        # 2. Type de Média
+        media_type_frame = ttk.LabelFrame(main_frame, text="Type de Média", padding="5")
+        media_type_frame.pack(fill=tk.X, pady=(0, 5))
+        self.media_type_combo = ttk.Combobox(media_type_frame, textvariable=self.global_type_var, values=["video", "audio", "image"], state="readonly")
+        self.media_type_combo.pack(fill=tk.X, expand=True)
+        self.media_type_combo.bind("<<ComboboxSelected>>", self._on_media_type_change)
+
+        # 3. Résolution et Rognage
+        self.transform_frame = ttk.LabelFrame(main_frame, text="Taille et Rognage", padding="5")
+        self.transform_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Label(self.transform_frame, text="Résolution:").grid(row=0, column=0, sticky="w", pady=(0, 5))
+        self.resolution_combo = ttk.Combobox(self.transform_frame, textvariable=self.resolution_var_settings, state="readonly")
+        self.resolution_combo.grid(row=0, column=1, columnspan=3, sticky="ew", pady=(0, 5))
+        self.resolution_combo.bind("<<ComboboxSelected>>", self._on_resolution_change)
+        
+        # Initialiser les valeurs de résolution communes
+        self._update_resolution_choices()
+        
+        ttk.Label(self.transform_frame, text="Rognage (px):").grid(row=1, column=0, sticky="w")
+        ttk.Label(self.transform_frame, text="Haut:").grid(row=2, column=0, sticky="e", padx=5)
+        ttk.Entry(self.transform_frame, textvariable=self.crop_top_var, width=5).grid(row=2, column=1)
+        ttk.Label(self.transform_frame, text="Bas:").grid(row=2, column=2, sticky="e", padx=5)
+        ttk.Entry(self.transform_frame, textvariable=self.crop_bottom_var, width=5).grid(row=2, column=3)
+        ttk.Label(self.transform_frame, text="Gauche:").grid(row=3, column=0, sticky="e", padx=5)
+        ttk.Entry(self.transform_frame, textvariable=self.crop_left_var, width=5).grid(row=3, column=1)
+        ttk.Label(self.transform_frame, text="Droite:").grid(row=3, column=2, sticky="e", padx=5)
+        ttk.Entry(self.transform_frame, textvariable=self.crop_right_var, width=5).grid(row=3, column=3)
+        
+        # 4. Format et Codec
+        format_frame = ttk.LabelFrame(main_frame, text="Format et Codec", padding="5")
+        format_frame.pack(fill=tk.X, pady=(0, 5))
+        ttk.Label(format_frame, text="Conteneur:").grid(row=0, column=0, sticky="w", pady=2)
+        self.container_combo = ttk.Combobox(format_frame, textvariable=self.container_var, state="readonly")
+        self.container_combo.grid(row=0, column=1, sticky="ew", pady=2)
+        ttk.Label(format_frame, text="Codec Vidéo:").grid(row=1, column=0, sticky="w", pady=2)
+        self.global_codec_combo = ttk.Combobox(format_frame, textvariable=self.global_codec_var, state="readonly")
+        self.global_codec_combo.grid(row=1, column=1, sticky="ew", pady=2)
+        self.global_codec_combo.bind("<<ComboboxSelected>>", self._on_codec_change)
+        ttk.Label(format_frame, text="Encodeur:").grid(row=2, column=0, sticky="w", pady=2)
+        self.global_encoder_combo = ttk.Combobox(format_frame, textvariable=self.global_encoder_var, state="readonly", width=40)
+        self.global_encoder_combo.grid(row=2, column=1, sticky="ew", pady=2)
+        self.global_encoder_combo.bind("<<ComboboxSelected>>", self._on_encoder_change)
+        
+        # 5. Qualité
+        self.quality_frame = ttk.LabelFrame(main_frame, text="Qualité", padding="5")
+        self.quality_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        self.video_mode_radio_quality = ttk.Radiobutton(self.quality_frame, text="Qualité Constante (CQ)", variable=self.video_mode_var, value="quality", command=self._on_video_mode_change)
+        self.video_mode_radio_quality.grid(row=0, column=0, sticky="w")
+        self.cq_entry = ttk.Entry(self.quality_frame, textvariable=self.quality_var, width=5)
+        self.cq_entry.grid(row=0, column=1, sticky="w")
+        
+        self.video_mode_radio_bitrate = ttk.Radiobutton(self.quality_frame, text="Bitrate (kbps)", variable=self.video_mode_var, value="bitrate", command=self._on_video_mode_change)
+        self.video_mode_radio_bitrate.grid(row=1, column=0, sticky="w")
+        self.bitrate_entry = ttk.Entry(self.quality_frame, textvariable=self.bitrate_var, width=8)
+        self.bitrate_entry.grid(row=1, column=1, sticky="w")
+        self.multipass_check = ttk.Checkbutton(self.quality_frame, text="2-Passes", variable=self.multipass_var)
+        self.multipass_check.grid(row=1, column=2, sticky="w")
+        
+        self.preset_label = ttk.Label(self.quality_frame, text="Preset Encodeur:")
+        self.preset_label.grid(row=2, column=0, sticky="w", pady=(5,0))
+        self.quality_entry = ttk.Combobox(self.quality_frame, textvariable=self.preset_var, state="readonly")
+        self.quality_entry.grid(row=2, column=1, columnspan=2, sticky="ew", pady=(5,0))
+
+        # 6. HDR et Color Management
+        self.hdr_frame = ttk.LabelFrame(main_frame, text="HDR et Couleur", padding="5")
+        self.hdr_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Label(self.hdr_frame, text="HDR Détecté:").grid(row=0, column=0, sticky="w", pady=2)
+        self.hdr_status_label = ttk.Label(self.hdr_frame, text="Non détecté", foreground="gray")
+        self.hdr_status_label.grid(row=0, column=1, sticky="w", pady=2)
+        
+        self.preserve_hdr_check = ttk.Checkbutton(self.hdr_frame, text="Préserver HDR (si possible)", 
+                                                 variable=self.preserve_hdr_var)
+        self.preserve_hdr_check.grid(row=1, column=0, columnspan=2, sticky="w", pady=2)
+        
+        self.tonemap_check = ttk.Checkbutton(self.hdr_frame, text="Tone mapping vers SDR", 
+                                           variable=self.tonemap_var, command=self._on_tonemap_change)
+        self.tonemap_check.grid(row=2, column=0, sticky="w", pady=2)
+        
+        ttk.Label(self.hdr_frame, text="Méthode:").grid(row=2, column=1, sticky="w", padx=(10,0), pady=2)
+        self.tonemap_method_combo = ttk.Combobox(self.hdr_frame, textvariable=self.tonemap_method_var,
+                                               values=["hable", "mobius", "reinhard", "bt2390"], 
+                                               state="readonly", width=10)
+        self.tonemap_method_combo.grid(row=2, column=2, sticky="w", pady=2)
+        
+        # Ajuster la configuration des colonnes pour s'adapter au contenu
+        self.transform_frame.columnconfigure(1, weight=1)
+        self.transform_frame.columnconfigure(3, weight=1)
+        format_frame.columnconfigure(1, weight=1)
+        self.quality_frame.columnconfigure(2, weight=1)
+        
+        # Initialisation des valeurs
+        self._on_video_mode_change() # Pour cacher/afficher les bons contrôles
+        self._on_tonemap_change() # Pour désactiver la méthode au début
+        
+        # Appliquer l'UI selon le type de média par défaut
+        initial_media_type = self.global_type_var.get() or "video"
+        self._update_media_type_ui(initial_media_type)
+        
+        # Mise à jour initiale du scroll
+        self.root.after(100, self._update_scroll_state)
+        
+    def _on_media_type_change(self, event=None):
+        """Met à jour les choix de l'UI quand le type de média change."""
+        media_type = self.global_type_var.get()
+        self._update_codec_choices()
+        self._update_media_type_ui(media_type)
+    
+    def _on_codec_change(self, event=None):
+        """Appelé quand le codec change pour mettre à jour les encodeurs disponibles."""
+        self._update_encoder_choices()
+        self._update_container_choices()
+    
+    def _on_encoder_change(self, event=None):
+        """Appelé quand l'encodeur change pour mettre à jour les presets."""
+        self._update_quality_preset_controls()
+    
+    def _on_tonemap_change(self):
+        """Active ou désactive la méthode de tone mapping."""
+        if self.tonemap_var.get():
+            self.tonemap_method_combo.config(state="readonly")
+            self.preserve_hdr_var.set(False)  # Désactiver préservation HDR si tone mapping actif
+        else:
+            self.tonemap_method_combo.config(state="disabled")
+    
+    def _on_frame_configure(self, event):
+        """Met à jour la zone de défilement quand le frame change de taille."""
+        self.settings_canvas.configure(scrollregion=self.settings_canvas.bbox("all"))
+        self._update_scroll_state()
+    
+    def _on_canvas_configure(self, event):
+        """Met à jour la largeur du frame intérieur pour s'adapter au canvas."""
+        canvas_width = event.width
+        self.settings_canvas.itemconfig(self._canvas_window, width=canvas_width)
+        self._update_scroll_state()
+    
+    def _update_scroll_state(self):
+        """Affiche ou cache la scrollbar selon si le contenu dépasse la hauteur disponible."""
+        # Mettre à jour la région de défilement
+        self.settings_canvas.configure(scrollregion=self.settings_canvas.bbox("all"))
+        
+        # Vérifier si le contenu dépasse la hauteur visible
+        bbox = self.settings_canvas.bbox("all")
+        if bbox:
+            content_height = bbox[3] - bbox[1]
+            canvas_height = self.settings_canvas.winfo_height()
+            
+            if content_height > canvas_height:
+                # Afficher la scrollbar
+                self._scrollbar.pack(side="right", fill="y")
+            else:
+                # Cacher la scrollbar
+                self._scrollbar.pack_forget()
+    
+    def _update_resolution_choices(self):
+        """Met à jour les choix de résolution avec des valeurs communes incluant les formats verticaux."""
+        resolution_choices = [
+            "Keep Original",
+            # Formats horizontaux standards
+            "3840x2160 (4K)",
+            "2560x1440 (1440p)",
+            "1920x1080 (1080p)",
+            "1280x720 (720p)",
+            "854x480 (480p)",
+            "640x360 (360p)",
+            # Formats verticaux (pour mobile/TikTok/Instagram Stories)
+            "1080x1920 (1080p Portrait)",
+            "720x1280 (720p Portrait)",
+            "480x854 (480p Portrait)",
+            "540x960 (TikTok/Stories)",
+            "1125x2000 (Instagram Stories)",
+            # Formats ultra-larges
+            "3440x1440 (Ultrawide 1440p)",
+            "2560x1080 (Ultrawide 1080p)",
+            # Formats classiques
+            "1920x1200 (WUXGA)",
+            "1680x1050 (WSXGA+)",
+            "1440x900 (WXGA+)",
+            "1280x800 (WXGA)",
+            "Custom"
+        ]
+        
+        self.resolution_combo['values'] = resolution_choices
+        if not self.resolution_var_settings.get():
+            self.resolution_var_settings.set("Keep Original")
+
+    def _apply_settings_to_selected_file(self):
+        """Applique les réglages actuels de l'UI au fichier sélectionné"""
+        selected_filename = self.selected_file_var.get()
+        if selected_filename == "No file selected" or not selected_filename:
+            messagebox.showwarning("No File Selected", "Please select a file to apply settings to.")
+            return
+        
+        # Trouver le job correspondant au fichier sélectionné
+        target_job = None
+        for job_id, job_data in self.job_rows.items():
+            job = job_data["job"]
+            if job.src_path.name == selected_filename:
+                target_job = job
+                break
+        
+        if not target_job:
+            messagebox.showerror("Job Not Found", "Could not find the job for the selected file.")
+            return
+        
+        # Appliquer les réglages de l'UI au job
+        self._apply_ui_settings_to_job(target_job)
+        
+        # Mettre à jour l'affichage dans le treeview
+        self._update_job_row(target_job)
+        
+        # Confirmation pour l'utilisateur
+        messagebox.showinfo("Settings Applied", f"Settings have been applied to '{selected_filename}'")
+
+    def _apply_settings_to_all_files(self):
+        """Applique les réglages actuels à tous les fichiers de la queue"""
+        if not self.jobs:
+            messagebox.showwarning("No Files", "No files in the queue to apply settings to.")
+            return
+        
+        # Demander confirmation
+        result = messagebox.askyesno(
+            "Apply to All", 
+            f"Apply current settings to all {len(self.jobs)} files in the queue?",
+            icon='question'
+        )
+        
+        if not result:
+            return
+        
+        # Appliquer les réglages à tous les jobs
+        for job in self.jobs:
+            self._apply_ui_settings_to_job(job)
+            self._update_job_row(job)
+        
+        messagebox.showinfo("Settings Applied", f"Settings have been applied to all {len(self.jobs)} files")
+
+    def _reset_settings_ui(self):
+        """Remet à zéro tous les réglages de l'interface"""
+        # Demander confirmation
+        result = messagebox.askyesno(
+            "Reset Settings", 
+            "Reset all encoding settings to default values?",
+            icon='question'
+        )
+        
+        if not result:
+            return
+        
+        # Réinitialiser toutes les variables
+        self.global_type_var.set("video")
+        self.global_codec_var.set("")
+        self.global_encoder_var.set("")
+        self.container_var.set("")
+        self.quality_var.set("")
+        self.preset_var.set("")
+        self.cq_var.set("")
+        self.custom_flags_var.set("")
+        self.video_mode_var.set("cq")
+        self.bitrate_var.set("")
+        self.multipass_var.set(False)
+        self.resolution_var_settings.set("")
+        self.subtitle_mode_var.set("copy")
+        self.subtitle_path_var.set("")
+        self.trim_start_var.set("")
+        self.trim_end_var.set("")
+        
+        # Mettre à jour les choix disponibles
+        self._update_codec_choices()
+        
+        messagebox.showinfo("Settings Reset", "All encoding settings have been reset to default values")
+
     def _build_menu(self):
         menubar = Menu(self.root)
         file_menu = Menu(menubar, tearoff=0)
@@ -103,6 +631,8 @@ class MainWindow:
         edit_menu.add_command(label="Audio Tracks", command=self._configure_audio_tracks)
         edit_menu.add_separator()
         edit_menu.add_command(label="Clear Queue", command=self._clear_queue)
+        edit_menu.add_separator()
+        edit_menu.add_command(label="Merge Videos", command=self._merge_videos)
         menubar.add_cascade(label="Edit", menu=edit_menu)
 
         # Menu Presets
@@ -127,56 +657,13 @@ class MainWindow:
         menubar.add_cascade(label="Settings", menu=settings_menu)
         self.root.config(menu=menubar)
 
-    def _build_layout(self):
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
-
-        # Onglets pour différents types de contenu
-        notebook = ttk.Notebook(main_frame)
-        notebook.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-
-        file_section = ttk.LabelFrame(notebook, text="File Selection", padding=15)
-        file_section.pack(fill="x", pady=(0, 15))
-
-        settings_section = ttk.LabelFrame(notebook, text="Encoding Settings", padding=15)
-        settings_section.pack(fill="x", pady=(0, 15))
-
-        queue_section = ttk.LabelFrame(notebook, text="Encoding Queue", padding=10)
-        queue_section.pack(fill="both", expand=True, pady=(0, 15))
-
-        inspector_frame = ttk.LabelFrame(notebook, text="Inspecteur média", padding=10)
-        inspector_frame.pack(fill="x", pady=(0, 15))
-
-        notebook.add(file_section, text="Sélection de fichiers")
-        notebook.add(settings_section, text="Paramètres d'encodage")
-        notebook.add(inspector_frame, text="Inspecteur média")
-        notebook.add(queue_section, text="File d'attente")
-
-        # === MEDIA INSPECTOR SECTION ===
-        paned_window = ttk.PanedWindow(inspector_frame, orient=tk.HORIZONTAL)
-        paned_window.pack(fill=tk.BOTH, expand=True)
-
-        # Left pane: file list
-        inspector_list_frame = ttk.Frame(paned_window, width=300)
-        paned_window.add(inspector_list_frame, weight=1)
-
-        ttk.Label(inspector_list_frame, text="Fichiers en file d'attente", font=("Helvetica", 10, "bold")).pack(pady=(0, 5))
-        
-        self.inspector_tree = ttk.Treeview(inspector_list_frame, columns=("file",), show="headings", height=10)
-        self.inspector_tree.heading("file", text="Fichier")
-        self.inspector_tree.pack(fill=tk.BOTH, expand=True)
-        self.inspector_tree.bind("<<TreeviewSelect>>", self._on_inspector_selection_change)
-
-        # Right pane: media info (will be populated dynamically)
-        self.inspector_info_frame = ttk.Frame(paned_window)
-        paned_window.add(self.inspector_info_frame, weight=2)
-        
-        # === FILE SELECTION SECTION ===
+    def _build_file_section(self, parent_frame):
+        # --- FILE SELECTION SECTION ---
         self.input_folder = StringVar(value="No input folder selected")
         self.output_folder = StringVar(value="No output folder selected")
 
         # Clean folder selection grid
-        folder_grid = ttk.Frame(file_section)
+        folder_grid = ttk.Frame(parent_frame)
         folder_grid.pack(fill="x")
 
         # Input folder
@@ -199,15 +686,15 @@ class MainWindow:
         folder_grid.columnconfigure(1, weight=1)
 
         # Add buttons row
-        buttons_row = ttk.Frame(file_section)
+        buttons_row = ttk.Frame(parent_frame)
         buttons_row.pack(fill="x", pady=(15, 0))
         
         ttk.Button(buttons_row, text="Add Files", command=self._add_files).pack(side="left", padx=(0, 10))
         ttk.Button(buttons_row, text="Add Folder", command=self._add_folder).pack(side="left", padx=(0, 10))
-        ttk.Button(buttons_row, text="Find Files in Input Folder", command=self._find_and_add_files).pack(side="left")
+        ttk.Button(buttons_row, text="Add from URL", command=self._add_from_url).pack(side="left", padx=(0, 10))
 
         # Ajout du cadre pour la surveillance de dossier
-        watch_frame = ttk.LabelFrame(file_section, text="Surveillance de dossier", padding="5")
+        watch_frame = ttk.LabelFrame(parent_frame, text="Surveillance de dossier", padding="5")
         watch_frame.pack(fill=tk.X, pady=(15, 0))
         watch_toggle = ttk.Checkbutton(watch_frame, text="Surveiller le dossier d'entrée", variable=self.watch_var, command=self._toggle_watch)
         watch_toggle.pack(side=tk.TOP, fill=tk.X)
@@ -225,328 +712,6 @@ class MainWindow:
         self.watch_status = ttk.Label(watch_frame, text="Statut: Inactif")
         self.watch_status.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
 
-        # === ENCODING SETTINGS SECTION ===
-        # File selection for preview
-        file_select_row = ttk.Frame(settings_section)
-        file_select_row.pack(fill="x", pady=(0, 10))
-        
-        ttk.Label(file_select_row, text="Selected File:", font=("Helvetica", 10, "bold")).pack(side="left", padx=(0, 5))
-        self.selected_file_var = StringVar(value="No file selected")
-        self.selected_file_combo = ttk.Combobox(file_select_row, textvariable=self.selected_file_var, width=50, state="readonly")
-        self.selected_file_combo.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        self.selected_file_combo.bind("<<ComboboxSelected>>", self._on_file_selection_change)
-        
-        # Top row - Media Type and Quick Presets
-        top_row = ttk.Frame(settings_section)
-        top_row.pack(fill="x", pady=(0, 15))
-
-        ttk.Label(top_row, text="Media Type:", font=("Helvetica", 10, "bold")).pack(side="left", padx=(0, 5))
-        self.global_type_var = StringVar(value="video")
-        self.global_codec_var = StringVar(value="")
-        self.global_encoder_var = StringVar(value="")
-        type_combo = ttk.Combobox(top_row, textvariable=self.global_type_var, 
-                                 values=["video", "audio", "image"], width=10, state="readonly")
-        type_combo.pack(side="left", padx=(0, 20))
-        type_combo.bind("<<ComboboxSelected>>", lambda e: self._update_codec_choices())
-
-        ttk.Label(top_row, text="Quick Presets:", font=("Helvetica", 10, "bold")).pack(side="left", padx=(0, 5))
-        self.preset_name_var = StringVar(value="")
-        self.preset_combo = ttk.Combobox(top_row, textvariable=self.preset_name_var, width=18, state="readonly")
-        self.preset_combo.pack(side="left", padx=(0, 10))
-        self.preset_combo.bind("<<ComboboxSelected>>", self._load_preset)
-
-        ttk.Button(top_row, text="Save", command=self._save_preset, width=4).pack(side="left", padx=(2, 2))
-        ttk.Button(top_row, text="Delete", command=self._delete_preset, width=5).pack(side="left")
-
-        # Codec and Encoder rows
-        codec_encoder_frame = ttk.Frame(settings_section)
-        codec_encoder_frame.pack(fill="x", pady=(0, 15))
-
-        # Codec selection row
-        codec_row = ttk.Frame(codec_encoder_frame)
-        codec_row.pack(fill="x", pady=(0, 8))
-
-        ttk.Label(codec_row, text="1. Codec:", font=("Helvetica", 10, "bold"), width=10).pack(side="left", padx=(0, 5))
-        self.global_codec_combo = ttk.Combobox(codec_row, textvariable=self.global_codec_var, width=25, state="readonly")
-        self.global_codec_combo.pack(side="left", padx=(0, 10))
-        self.global_codec_combo.bind("<<ComboboxSelected>>", lambda e: self._update_encoder_choices())
-
-        # Help text for codec button
-        ttk.Label(codec_row, text="Smart apply", font=("Helvetica", 8), foreground="gray").pack(side="right", padx=(5, 5))
-        ttk.Button(codec_row, text="Apply Codec", command=self._apply_codec_smart).pack(side="right")
-
-        # Encoder selection row  
-        encoder_row = ttk.Frame(codec_encoder_frame)
-        encoder_row.pack(fill="x")
-        self.encoder_row = encoder_row  # Stocker la référence pour modification dynamique
-
-        ttk.Label(encoder_row, text="2. Encoder:", font=("Helvetica", 10, "bold"), width=10).pack(side="left", padx=(0, 5))
-        self.global_encoder_combo = ttk.Combobox(encoder_row, textvariable=self.global_encoder_var, width=50, state="readonly")
-        self.global_encoder_combo.pack(side="left", fill="x", expand=True)
-        self.global_encoder_combo.bind("<<ComboboxSelected>>", lambda e: self._update_quality_preset_controls())
-        
-        # Add help text
-        help_label = ttk.Label(encoder_row, text="(Only compatible encoders)", font=("Helvetica", 9), foreground="gray")
-        help_label.pack(side="right", padx=(10, 0))
-
-        # Quality Controls
-        quality_frame = ttk.Frame(settings_section)
-        quality_frame.pack(fill="x", pady=(0, 15))
-
-        # Quality settings row
-        quality_row = ttk.Frame(quality_frame)
-        quality_row.pack(fill="x", pady=(0, 8))
-
-        # Video encoding mode selector
-        self.video_mode_var = StringVar(value="quality")  # quality, bitrate
-        self.video_mode_frame = ttk.Frame(quality_row)
-        
-        ttk.Label(quality_row, text="Quality/CRF:", font=("Helvetica", 10, "bold")).pack(side="left", padx=(0, 5))
-        self.quality_var = StringVar(value="")
-        self.quality_entry = ttk.Entry(quality_row, textvariable=self.quality_var, width=8)
-        self.quality_entry.pack(side="left", padx=(0, 10))
-
-        ttk.Label(quality_row, text="CQ:", font=("Helvetica", 10, "bold")).pack(side="left", padx=(0, 5))
-        self.cq_var = StringVar(value="")
-        self.cq_entry = ttk.Entry(quality_row, textvariable=self.cq_var, width=8)
-        self.cq_entry.pack(side="left", padx=(0, 15))
-
-        # Bitrate controls (initially hidden)
-        self.bitrate_label = ttk.Label(quality_row, text="Bitrate:", font=("Helvetica", 10, "bold"))
-        self.bitrate_var = StringVar(value="")
-        self.bitrate_entry = ttk.Entry(quality_row, textvariable=self.bitrate_var, width=8)
-        
-        # Multi-pass controls (initially hidden)
-        self.multipass_var = BooleanVar(value=False)
-        self.multipass_check = ttk.Checkbutton(quality_row, text="Multi-pass", variable=self.multipass_var)
-
-        ttk.Label(quality_row, text="Preset:", font=("Helvetica", 10, "bold")).pack(side="left", padx=(0, 5))
-        self.preset_var = StringVar(value="")
-        self.preset_combo_quality = ttk.Combobox(quality_row, textvariable=self.preset_var, width=10, state="readonly")
-        self.preset_combo_quality.pack(side="left", padx=(0, 15))
-
-        ttk.Label(quality_row, text="Container:", font=("Helvetica", 10, "bold")).pack(side="left", padx=(0, 5))
-        self.container_var = StringVar(value="MP4")
-        self.container_combo = ttk.Combobox(quality_row, textvariable=self.container_var, 
-                                           width=12, state="readonly")
-        self.container_combo.pack(side="left")
-        self._update_container_choices()
-
-        # Mode selector row (for video)
-        mode_row = ttk.Frame(quality_frame)
-        self.mode_row = mode_row  # Store reference for showing/hiding
-        
-        ttk.Label(mode_row, text="Encoding Mode:", font=("Helvetica", 10, "bold")).pack(side="left", padx=(0, 5))
-        quality_radio = ttk.Radiobutton(mode_row, text="Quality (CRF)", variable=self.video_mode_var, value="quality", command=self._on_video_mode_change)
-        quality_radio.pack(side="left", padx=(0, 10))
-        bitrate_radio = ttk.Radiobutton(mode_row, text="Bitrate (CBR/VBR)", variable=self.video_mode_var, value="bitrate", command=self._on_video_mode_change)
-        bitrate_radio.pack(side="left")
-
-        # Resolution row
-        resolution_row = ttk.Frame(quality_frame)
-        resolution_row.pack(fill="x", pady=(8, 0))
-
-        ttk.Label(resolution_row, text="Resolution:", font=("Helvetica", 10, "bold")).pack(side="left", padx=(0, 5))
-        self.resolution_var_settings = StringVar(value="Original")
-        self.resolution_combo = ttk.Combobox(resolution_row, textvariable=self.resolution_var_settings, 
-                                           values=["Original", "3840x2160 (4K)", "1920x1080 (1080p)", "1280x720 (720p)", 
-                                                  "854x480 (480p)", "640x360 (360p)", 
-                                                  "2160x3840 (4K Portrait)", "1080x1920 (1080p Portrait)", 
-                                                  "720x1280 (720p Portrait)", "480x854 (480p Portrait)", "Custom"], 
-                                           width=25, state="readonly")
-        self.resolution_combo.pack(side="left", padx=(0, 10))
-        self.resolution_combo.bind("<<ComboboxSelected>>", self._on_resolution_change)
-        
-        # Image-specific resolution controls (hidden by default)
-        self.image_res_frame = ttk.Frame(resolution_row)
-        ttk.Label(self.image_res_frame, text="Longest side:", font=("Helvetica", 10, "bold")).pack(side="left", padx=(10, 5))
-        self.longest_side_var = StringVar(value="")
-        self.longest_side_combo = ttk.Combobox(self.image_res_frame, textvariable=self.longest_side_var,
-                                             values=["Original", "5200", "4096", "3840", "2560", "1920", "1280", "Custom"],
-                                             width=10, state="readonly")
-        self.longest_side_combo.pack(side="left", padx=(0, 10))
-        self.longest_side_combo.bind("<<ComboboxSelected>>", self._on_longest_side_change)
-        
-        ttk.Label(self.image_res_frame, text="Megapixels:", font=("Helvetica", 10, "bold")).pack(side="left", padx=(10, 5))
-        self.megapixels_var = StringVar(value="")
-        self.megapixels_combo = ttk.Combobox(self.image_res_frame, textvariable=self.megapixels_var,
-                                           values=["Original", "50", "25", "16", "12", "8", "4", "2", "Custom"],
-                                           width=8, state="readonly")
-        self.megapixels_combo.pack(side="left")
-        self.megapixels_combo.bind("<<ComboboxSelected>>", self._on_megapixels_change)
-        
-        # Custom resolution fields (hidden by default)
-        self.custom_width_var = StringVar(value="")
-        self.custom_height_var = StringVar(value="")
-        self.width_entry = ttk.Entry(resolution_row, textvariable=self.custom_width_var, width=8)
-        self.height_entry = ttk.Entry(resolution_row, textvariable=self.custom_height_var, width=8)
-        self.x_label = ttk.Label(resolution_row, text="x")
-        
-        # Custom longest side entry (hidden by default)
-        self.custom_longest_var = StringVar(value="")
-        self.custom_longest_entry = ttk.Entry(self.image_res_frame, textvariable=self.custom_longest_var, width=8)
-        
-        # Custom megapixels entry (hidden by default)
-        self.custom_mp_var = StringVar(value="")
-        self.custom_mp_entry = ttk.Entry(self.image_res_frame, textvariable=self.custom_mp_var, width=8)
-
-        # Ajout des contrôles de recadrage pour la vidéo
-        self.crop_frame = ttk.Frame(resolution_row)
-        ttk.Label(self.crop_frame, text="Crop (px):", font=("Helvetica", 10, "bold")).pack(side="left", padx=(10, 5))
-        
-        ttk.Label(self.crop_frame, text="L:").pack(side="left", padx=(0, 2))
-        self.crop_left_var = StringVar(value="0")
-        self.crop_left_entry = ttk.Entry(self.crop_frame, textvariable=self.crop_left_var, width=5)
-        self.crop_left_entry.pack(side="left", padx=(0, 5))
-        
-        ttk.Label(self.crop_frame, text="R:").pack(side="left", padx=(0, 2))
-        self.crop_right_var = StringVar(value="0")
-        self.crop_right_entry = ttk.Entry(self.crop_frame, textvariable=self.crop_right_var, width=5)
-        self.crop_right_entry.pack(side="left", padx=(0, 5))
-        
-        ttk.Label(self.crop_frame, text="T:").pack(side="left", padx=(0, 2))
-        self.crop_top_var = StringVar(value="0")
-        self.crop_top_entry = ttk.Entry(self.crop_frame, textvariable=self.crop_top_var, width=5)
-        self.crop_top_entry.pack(side="left", padx=(0, 5))
-        
-        ttk.Label(self.crop_frame, text="B:").pack(side="left", padx=(0, 2))
-        self.crop_bottom_var = StringVar(value="0")
-        self.crop_bottom_entry = ttk.Entry(self.crop_frame, textvariable=self.crop_bottom_var, width=5)
-        self.crop_bottom_entry.pack(side="left", padx=(0, 5))
-        
-        self.crop_frame.pack(side="left", padx=(10, 0))
-        
-        # Ajout des contrôles de timestamp et de prévisualisation de frame (pour vidéo uniquement)
-        self.preview_row = ttk.Frame(quality_frame)
-        self.preview_row.pack(fill="x", pady=(8, 0))
-        
-        ttk.Label(self.preview_row, text="Preview Timestamp:", font=("Helvetica", 10, "bold")).pack(side="left", padx=(0, 5))
-        self.timestamp_var = StringVar(value="00:00:00")
-        self.timestamp_entry = ttk.Entry(self.preview_row, textvariable=self.timestamp_var, width=10)
-        self.timestamp_entry.pack(side="left", padx=(0, 10))
-        
-        ttk.Button(self.preview_row, text="Previous Frame", command=self._preview_previous_frame).pack(side="left", padx=(0, 5))
-        ttk.Button(self.preview_row, text="Render Frame", command=self._render_preview_frame).pack(side="left", padx=(0, 5))
-        ttk.Button(self.preview_row, text="Next Frame", command=self._preview_next_frame).pack(side="left", padx=(0, 5))
-        
-        # Cadre séparé pour afficher l'image de prévisualisation
-        preview_image_row = ttk.Frame(quality_frame)
-        preview_image_row.pack(fill="x", pady=(8, 0))
-        
-        self.preview_image_label = ttk.Label(preview_image_row, text="No preview available", relief="sunken", width=40)
-        self.preview_image_label.pack(side="left", padx=(0, 10))
-
-        # Custom flags row
-        custom_row = ttk.Frame(quality_frame)
-        custom_row.pack(fill="x", pady=(8, 0))
-
-        ttk.Label(custom_row, text="Custom Flags:", font=("Helvetica", 10, "bold")).pack(side="left", padx=(0, 5))
-        self.custom_flags_var = StringVar(value="")
-        self.custom_flags_entry = ttk.Entry(custom_row, textvariable=self.custom_flags_var, width=50)
-        self.custom_flags_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        
-        # Help label for custom flags
-        help_label = ttk.Label(custom_row, text="(Advanced: additional FFmpeg parameters)", 
-                              font=("Helvetica", 9), foreground="gray")
-        help_label.pack(side="right")
-
-        # Action buttons row
-        action_row = ttk.Frame(quality_frame)
-        action_row.pack(fill="x", pady=(8, 0))
-
-        apply_btn = ttk.Button(action_row, text="Apply Settings", command=self._apply_settings_smart)
-        apply_btn.pack(side="left", padx=(0, 5))
-        
-        ttk.Button(action_row, text="Duplicate Selected", command=self._duplicate_selected).pack(side="left", padx=(0, 10))
-        
-        # Help text for Apply behavior
-        help_text = ttk.Label(action_row, text="Applies to selected jobs or all jobs of current type if none selected", 
-                             font=("Helvetica", 8), foreground="gray")
-        help_text.pack(side="left", padx=(10, 0))
-
-        self._update_preset_list()
-        self._update_codec_choices()
-        self._update_quality_preset_controls()
-        
-        # Initialiser l'interface pour le type par défaut
-        self._update_media_type_ui(self.global_type_var.get())
-
-        # === ENCODING QUEUE SECTION ===
-        # Queue treeview with scrollbar
-        queue_frame = ttk.Frame(queue_section)
-        queue_frame.pack(fill="both", expand=True)
-
-        self.tree = ttk.Treeview(queue_frame, columns=("file", "encoder", "quality", "progress", "status"), show="headings", height=12)
-        for col, label in zip(self.tree["columns"], ["File", "Encoder", "Quality", "Progress", "Status"]):
-            self.tree.heading(col, text=label)
-            if col == "progress":
-                self.tree.column(col, width=80)
-            elif col == "status":
-                self.tree.column(col, width=80)
-            else:
-                self.tree.column(col, width=150)
-
-        self.tree.bind("<Double-1>", self._on_double_click)
-        self.tree.bind("<<TreeviewSelect>>", self._on_queue_selection_change)
-        self.tree.bind("<Button-2>", self._on_right_click)  # macOS right-click
-        self.tree.bind("<Button-3>", self._on_right_click)  # Windows/Linux right-click
-
-        # Scrollbar for queue
-        queue_scrollbar = ttk.Scrollbar(queue_frame, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=queue_scrollbar.set)
-
-        self.tree.pack(side="left", fill="both", expand=True)
-        queue_scrollbar.pack(side="right", fill="y")
-
-        # Context menu for jobs
-        self.context_menu = Menu(self.root, tearoff=0)
-        self.context_menu.add_command(label="Edit Job", command=self._edit_selected_job)
-        self.context_menu.add_command(label="Advanced Filters", command=self._advanced_filters)
-        self.context_menu.add_command(label="Audio Tracks", command=self._configure_audio_tracks)
-        self.context_menu.add_separator()
-        self.context_menu.add_command(label="Pause", command=self._pause_selected_job)
-        self.context_menu.add_command(label="Resume", command=self._resume_selected_job)
-        self.context_menu.add_command(label="Cancel", command=self._cancel_selected_job)
-        self.context_menu.add_separator()
-        self.context_menu.add_command(label="Batch Operations", command=self._batch_operations)
-        self.context_menu.add_command(label="Remove", command=self._remove_selected_job)
-
-        # === CONTROL PANEL ===
-        control_panel = ttk.Frame(main_frame)
-        control_panel.pack(fill="x")
-
-        # Progress bar
-        self.progress_var = StringVar(value="0%")
-        self.progress_bar = ttk.Progressbar(control_panel, orient="horizontal", mode="determinate")
-        self.progress_bar.pack(fill="x", pady=(0, 10))
-
-        # Control buttons
-        button_panel = ttk.Frame(control_panel)
-        button_panel.pack(fill="x")
-
-        # Main action button (larger and prominent)
-        self.start_btn = ttk.Button(button_panel, text="Start Encoding", command=self._start_encoding)
-        self.start_btn.pack(side="left", fill="x", expand=True, padx=(0, 10))
-
-        # Control buttons (compact icons)
-        control_buttons = ttk.Frame(button_panel)
-        control_buttons.pack(side="right")
-
-        self.pause_btn = ttk.Button(control_buttons, text="Pause", command=self._pause_all, state="disabled", width=5)
-        self.pause_btn.pack(side="left", padx=(0, 2))
-
-        self.resume_btn = ttk.Button(control_buttons, text="Resume", command=self._resume_all, state="disabled", width=6)
-        self.resume_btn.pack(side="left", padx=(0, 2))
-
-        self.cancel_btn = ttk.Button(control_buttons, text="Cancel", command=self._cancel_all, state="disabled", width=6)
-        self.cancel_btn.pack(side="left", padx=(0, 10))
-
-        ttk.Button(control_buttons, text="Clear", command=self._clear_queue, width=5).pack(side="left")
-
-        # Initialize drag & drop
-        if DND_AVAILABLE:
-            self._setup_drag_drop()
-
     # === Callbacks ===
     def _add_files(self):
         paths = filedialog.askopenfilenames(title="Select input files")
@@ -555,12 +720,15 @@ class MainWindow:
         self._enqueue_paths([Path(p) for p in paths])
 
     def _add_folder(self):
-        folder = filedialog.askdirectory(title="Select input folder")
-        if not folder:
-            return
-        root_path = Path(folder)
-        all_files = [p for p in root_path.rglob("*") if p.is_file()]
-        self._enqueue_paths(all_files)
+        folder_path = filedialog.askdirectory(title="Select a Folder")
+        if folder_path:
+            self.input_folder.set(folder_path)
+            paths = list(Path(folder_path).rglob("*.*"))
+            self._enqueue_paths(paths)
+
+    def _merge_videos(self):
+        from gui.merge_videos_window import MergeVideosWindow
+        MergeVideosWindow(self.root, self)
 
     def _add_files_or_folder(self):
         """Offre un choix entre ajouter des fichiers ou un dossier"""
@@ -580,6 +748,38 @@ class MainWindow:
         elif choice is False:  # No - Folder
             self._add_folder()
         # choice is None = Cancel, do nothing
+
+    def _add_from_url(self):
+        url = simpledialog.askstring("Add from URL", "Enter a video URL:")
+        if not url:
+            return
+
+        # Use a separate thread to download the video without blocking the UI
+        threading.Thread(target=self._download_and_enqueue, args=(url,), daemon=True).start()
+
+    def _download_and_enqueue(self, url):
+        try:
+            # Create a temporary directory to download the video
+            import tempfile
+            temp_dir = tempfile.mkdtemp()
+
+            # Use yt-dlp to download the video
+            command = [
+                "yt-dlp",
+                "-o", os.path.join(temp_dir, "%(title)s.%(ext)s"),
+                url
+            ]
+            subprocess.run(command, check=True)
+
+            # Find the downloaded file and enqueue it
+            downloaded_files = list(Path(temp_dir).rglob("*.*"))
+            if downloaded_files:
+                self.root.after_idle(self._enqueue_paths, downloaded_files)
+            else:
+                messagebox.showerror("Download Error", "Could not find the downloaded file.")
+
+        except Exception as e:
+            messagebox.showerror("Download Error", f"Could not download video: {e}")
 
     def _enqueue_paths(self, paths: list[Path]):
         out_root = Path(self.output_folder.get()) if self.output_folder.get() and not self.output_folder.get().startswith("(no") else None
@@ -606,6 +806,17 @@ class MainWindow:
             
             # Génération intelligente du chemin de sortie
             container = self._get_container_from_display(self.container_var.get())
+            
+            # Définir un container par défaut si vide
+            if not container:
+                if mode == "video":
+                    container = "mp4"
+                elif mode == "audio":
+                    container = "m4a"
+                elif mode == "image":
+                    container = "png"
+                else:
+                    container = "mp4"  # Fallback
             
             if out_root:
                 # Dossier de sortie spécifié
@@ -686,6 +897,8 @@ class MainWindow:
         video_exts = {".mp4", ".mov", ".mkv", ".avi", ".mxf", ".wmv"}
         audio_exts = {".flac", ".m4a", ".aac", ".wav", ".ogg", ".mp3"}
         image_exts = {".png", ".jpg", ".jpeg", ".webp", ".tiff", ".bmp"}
+        if ext == ".gif":
+            return "gif"
         if ext in video_exts:
             return "video"
         if ext in audio_exts:
@@ -708,31 +921,38 @@ class MainWindow:
         folder = filedialog.askdirectory(title="Select input folder")
         if folder:
             self.input_folder.set(folder)
-            # Optionally, auto-enqueue files from this folder
+            # Auto-importer tous les fichiers média du dossier
+            self._auto_import_from_folder(folder)
+
+    def _auto_import_from_folder(self, folder):
+        """Auto-importe tous les fichiers média d'un dossier"""
+        root_path = Path(folder)
+        if not root_path.exists() or not root_path.is_dir():
+            messagebox.showerror("Invalid Folder", "The selected input folder does not exist or is not a directory.")
+            return
+            
+        # Définir les extensions de fichiers média supportées
+        video_exts = {".mp4", ".mov", ".mkv", ".avi", ".mxf", ".wmv", ".webm", ".flv", ".m4v", ".3gp"}
+        audio_exts = {".flac", ".m4a", ".aac", ".wav", ".ogg", ".mp3", ".wma", ".opus", ".ac3"}
+        image_exts = {".png", ".jpg", ".jpeg", ".webp", ".tiff", ".bmp", ".gif", ".tga", ".dds"}
+        
+        # Rechercher tous les fichiers média dans le dossier et ses sous-dossiers
+        all_files = [p for p in root_path.rglob("*") if p.is_file() and p.suffix.lower() in (video_exts | audio_exts | image_exts)]
+        
+        if not all_files:
+            messagebox.showinfo("No Media Files Found", f"No media files found in the folder:\n{folder}")
+            return
+            
+        # Importer tous les fichiers trouvés
+        self._enqueue_paths(all_files)
+        messagebox.showinfo("Files Imported", f"Successfully imported {len(all_files)} media files from:\n{folder}")
 
     def _select_output_folder(self):
         folder = filedialog.askdirectory(title="Select output folder")
         if folder:
             self.output_folder.set(folder)
 
-    def _find_and_add_files(self):
-        folder = self.input_folder.get()
-        if not folder or folder.startswith("(no input"):
-            messagebox.showwarning("No Input Folder", "Please select an input folder first.")
-            return
-        root_path = Path(folder)
-        if not root_path.exists() or not root_path.is_dir():
-            messagebox.showerror("Invalid Folder", "The selected input folder does not exist or is not a directory.")
-            return
-        # Only add media files (video, audio, image)
-        video_exts = {".mp4", ".mov", ".mkv", ".avi", ".mxf", ".wmv"}
-        audio_exts = {".flac", ".m4a", ".aac", ".wav", ".ogg", ".mp3"}
-        image_exts = {".png", ".jpg", ".jpeg", ".webp", ".tiff", ".bmp"}
-        all_files = [p for p in root_path.rglob("*") if p.is_file() and p.suffix.lower() in (video_exts | audio_exts | image_exts)]
-        if not all_files:
-            messagebox.showinfo("No Media Files Found", "No media files found in the selected input folder.")
-            return
-        self._enqueue_paths(all_files)
+
 
     def _update_codec_choices(self):
         """Met à jour les choix de codecs basés sur le type de média sélectionné"""
@@ -750,7 +970,7 @@ class MainWindow:
                 ("MPEG-2", "mpeg2video"),
                 ("ProRes", "prores"),
                 ("DNxHD", "dnxhd"),
-                ("Remux (no re-encode)", "remux")
+                ("Remux (copy stream)", "remux")
             ]
         elif media_type == "audio":
             codec_choices = [
@@ -759,19 +979,20 @@ class MainWindow:
                 ("Opus", "opus"),
                 ("Vorbis", "vorbis"),
                 ("FLAC", "flac"),
-                ("ALAC", "alac"),
-                ("AC3", "ac3"),
-                ("PCM", "pcm_s16le"),
-                ("WAV", "wav")
+                ("ALAC (Apple Lossless)", "alac"),
+                ("AC3 (Dolby Digital)", "ac3"),
+                ("PCM 16-bit", "pcm_s16le"),
+                ("WAV", "wav"),
+                ("Copy (no re-encode)", "copy")
             ]
         else:  # image
             codec_choices = [
                 ("WebP", "webp"),
                 ("PNG", "png"),
                 ("JPEG", "mjpeg"),
+                ("AVIF (AV1)", "libaom-av1"),
                 ("BMP", "bmp"),
                 ("TIFF", "tiff"),
-                ("AVIF", "libaom-av1"),
                 ("JPEG XL", "jpegxl")
             ]
         
@@ -816,43 +1037,16 @@ class MainWindow:
     
     def _has_encoders_for_codec(self, codec: str) -> bool:
         """Vérifie si nous avons des encodeurs disponibles pour un codec donné"""
-        codec_encoder_map = {
-            'h264': ['libx264', 'h264_nvenc', 'h264_qsv', 'h264_amf', 'h264_videotoolbox'],
-            'hevc': ['libx265', 'hevc_nvenc', 'hevc_qsv', 'hevc_amf', 'hevc_videotoolbox'],
-            'av1': ['libsvtav1', 'libaom-av1', 'av1_nvenc', 'av1_qsv'],
-            'vp9': ['libvpx-vp9'],
-            'vp8': ['libvpx'],
-            'mpeg4': ['libxvid', 'mpeg4'],
-            'mpeg2video': ['mpeg2video'],
-            'prores': ['prores_ks'],
-            'dnxhd': ['dnxhd'],
-            'aac': ['aac', 'libfdk_aac'],
-            'mp3': ['libmp3lame'],
-            'opus': ['libopus'],
-            'vorbis': ['libvorbis'],
-            'flac': ['flac'],
-            'alac': ['alac'],
-            'ac3': ['ac3'],
-            'pcm_s16le': ['pcm_s16le'],
-            'wav': ['pcm_s16le'],
-            'webp': ['libwebp'],
-            'png': ['png'],
-            'mjpeg': ['mjpeg'],
-            'bmp': ['bmp'],
-            'tiff': ['tiff'],
-            'libaom-av1': ['libaom-av1'],
-            'jpegxl': ['libjxl']
-        }
-        
-        expected_encoders = codec_encoder_map.get(codec.lower(), [])
+        # Utiliser la logique cohérente avec la nouvelle méthode
+        expected_encoders = self._get_expected_encoders_for_codec(codec.lower())
         if not expected_encoders:
             return False
             
         # Vérifier si au moins un encodeur est disponible
         all_encoders = FFmpegHelpers.available_encoders()
-        available_encoder_names = [name for name, _ in all_encoders]
+        available_encoder_names = [name.lower() for name, _ in all_encoders]
         
-        return any(encoder in available_encoder_names for encoder in expected_encoders)
+        return any(encoder.lower() in available_encoder_names for encoder in expected_encoders)
 
     def _update_container_choices(self):
         """Met à jour les choix de containers basés sur le type de média"""
@@ -1007,53 +1201,53 @@ class MainWindow:
         # Obtenir tous les encodeurs avec descriptions
         all_encoders = FFmpegHelpers.available_encoders()
         
-        # Filtrer les encodeurs compatibles avec le codec
+        # Filtrer les encodeurs compatibles avec le codec de manière stricte
         compatible_encoders = []
         
-        # Pour certains codecs professionnels, ne montrer que l'encodeur principal
-        primary_encoders = {
-            'prores': 'prores_ks',
-            'dnxhd': 'dnxhd'
-        }
+        # Obtenir la liste exacte des encodeurs supportés pour ce codec
+        expected_encoders = self._get_expected_encoders_for_codec(codec)
         
-        if codec.lower() in primary_encoders:
-            # Ne montrer que l'encodeur principal pour ces codecs
-            primary_encoder = primary_encoders[codec.lower()]
-            for encoder_name, description in all_encoders:
-                if encoder_name == primary_encoder:
+        for encoder_name, description in all_encoders:
+            # Vérification stricte : l'encodeur doit être dans la liste exacte
+            if encoder_name.lower() in [enc.lower() for enc in expected_encoders]:
+                # Marquer les encodeurs hardware
+                if FFmpegHelpers.is_hardware_encoder(encoder_name):
+                    display_text = f"{encoder_name} - {description} (Hardware)"
+                else:
                     display_text = f"{encoder_name} - {description}"
-                    compatible_encoders.append((encoder_name, display_text))
-                    break
-        else:
-            # Logique normale pour les autres codecs
-            for encoder_name, description in all_encoders:
-                if codec in encoder_name.lower() or self._encoder_supports_codec(encoder_name, codec):
-                    # Marquer les encodeurs hardware
-                    if FFmpegHelpers.is_hardware_encoder(encoder_name):
-                        display_text = f"{encoder_name} - {description} (Hardware)"
-                    else:
-                        display_text = f"{encoder_name} - {description}"
-                    compatible_encoders.append((encoder_name, display_text))
+                compatible_encoders.append((encoder_name, display_text))
         
-        # Séparer les encodeurs hardware et software
-        hw_encoders = [(name, desc) for name, desc in compatible_encoders 
-                      if FFmpegHelpers.is_hardware_encoder(name)]
-        sw_encoders = [(name, desc) for name, desc in compatible_encoders 
-                      if not FFmpegHelpers.is_hardware_encoder(name)]
+        # Trier par priorité : software recommendé, puis hardware, puis autres
+        def encoder_priority(encoder_tuple):
+            encoder_name = encoder_tuple[0].lower()
+            
+            # Encodeurs recommandés en premier
+            priority_encoders = {
+                'h264': ['libx264', 'h264_videotoolbox', 'h264_nvenc'],
+                'hevc': ['libx265', 'hevc_videotoolbox', 'hevc_nvenc'], 
+                'av1': ['libsvtav1', 'libaom-av1', 'av1_nvenc'],
+                'vp9': ['libvpx-vp9'],
+                'aac': ['aac', 'libfdk_aac'],
+                'mp3': ['libmp3lame']
+            }
+            
+            recommended = priority_encoders.get(codec, [])
+            
+            if encoder_name in [r.lower() for r in recommended]:
+                return recommended.index(encoder_name.lower() if encoder_name.lower() in [r.lower() for r in recommended] else encoder_name)
+            else:
+                return 100  # Autres encodeurs à la fin
         
-        # Organiser la liste avec hardware en premier, puis software
+        # Trier les encodeurs par priorité
+        compatible_encoders.sort(key=encoder_priority)
+        
+        # Organiser la liste finale
         display_values = []
         encoder_mapping = {}  # Pour mapper display vers encoder name
         
-        if hw_encoders:
-            for name, desc in hw_encoders:
-                display_values.append(desc)
-                encoder_mapping[desc] = name
-                
-        if sw_encoders:
-            for name, desc in sw_encoders:
-                display_values.append(desc)
-                encoder_mapping[desc] = name
+        for name, desc in compatible_encoders:
+            display_values.append(desc)
+            encoder_mapping[desc] = name
         
         # Mettre à jour le combobox
         self.global_encoder_combo['values'] = display_values
@@ -1067,22 +1261,56 @@ class MainWindow:
             
         # Mettre à jour les contrôles qualité/preset
         self._update_quality_preset_controls()
-
-    def _encoder_supports_codec(self, encoder_name: str, codec: str) -> bool:
-        """Détermine si un encodeur supporte un codec donné"""
+    
+    def _get_expected_encoders_for_codec(self, codec: str) -> list[str]:
+        """Retourne la liste exacte des encodeurs supportés pour un codec donné"""
         codec_encoder_map = {
+            # Codecs vidéo
             'h264': ['libx264', 'h264_nvenc', 'h264_qsv', 'h264_amf', 'h264_videotoolbox'],
             'hevc': ['libx265', 'hevc_nvenc', 'hevc_qsv', 'hevc_amf', 'hevc_videotoolbox'],
-            'av1': ['libsvtav1', 'libaom-av1', 'av1_nvenc', 'av1_qsv'],
+            'av1': ['libsvtav1', 'libaom-av1', 'av1_nvenc', 'av1_qsv'],  # Seulement encodeurs vidéo
             'vp9': ['libvpx-vp9'],
             'vp8': ['libvpx'],
+            'mpeg4': ['libxvid', 'mpeg4'],
+            'mpeg2video': ['mpeg2video'],
+            'prores': ['prores_ks', 'prores'],
+            'dnxhd': ['dnxhd'],
+            'remux': ['copy'],  # Pour remux
+            
+            # Codecs audio
             'aac': ['aac', 'libfdk_aac'],
             'mp3': ['libmp3lame'],
             'opus': ['libopus'],
             'vorbis': ['libvorbis'],
-            'webp': ['libwebp']
+            'flac': ['flac'],
+            'alac': ['alac'],
+            'ac3': ['ac3'],
+            'pcm_s16le': ['pcm_s16le'],
+            'wav': ['pcm_s16le', 'pcm_s24le', 'pcm_s32le'],
+            'copy': ['copy'],  # Pour copy audio
+            
+            # Codecs image
+            'webp': ['libwebp'],
+            'mjpeg': ['mjpeg'],
+            'png': ['png'],
+            'bmp': ['bmp'],
+            'tiff': ['tiff'],
+            'libaom-av1': ['libaom-av1'],  # Pour AVIF
+            'jpegxl': ['libjxl'],
         }
-        return encoder_name in codec_encoder_map.get(codec, [encoder_name])
+        
+        return codec_encoder_map.get(codec.lower(), [])
+
+    def _encoder_supports_codec(self, encoder_name: str, codec: str) -> bool:
+        """Détermine si un encodeur supporte un codec donné - version stricte"""
+        encoder_clean = encoder_name.lower().strip()
+        codec_clean = codec.lower().strip()
+        
+        # Utiliser la même logique que _get_expected_encoders_for_codec
+        expected_encoders = self._get_expected_encoders_for_codec(codec_clean)
+        
+        # Vérification stricte : l'encodeur doit être exactement dans la liste
+        return encoder_clean in [enc.lower() for enc in expected_encoders]
 
     def _update_quality_preset_controls(self):
         """Met à jour les contrôles qualité/preset basés sur le codec/encodeur sélectionné"""
@@ -1094,197 +1322,145 @@ class MainWindow:
         codec = self._get_codec_from_display(codec_display).lower() if codec_display else ""
         encoder = self._get_encoder_name_from_display(encoder_display).lower() if encoder_display else ""
         
-        # Gérer l'affichage des contrôles spécifiques au type de média
-        self._update_media_type_ui(media_type)
+        # Réinitialiser les états des contrôles qui existent
+        if hasattr(self, 'quality_entry'):
+            self.quality_entry.config(state="normal")
+        if hasattr(self, 'cq_entry'):
+            self.cq_entry.config(state="normal")
         
-        # Réinitialiser les états
-        self.quality_entry.config(state="normal")
-        self.cq_entry.config(state="normal")
-        self.preset_combo_quality.config(state="readonly")
+        # Définir les presets disponibles selon l'encodeur pour vidéo
+        # Pour audio/image, les presets sont gérés dans leurs méthodes spécifiques
+        if media_type == "video":
+            preset_values = []
+            if "x264" in encoder or "x265" in encoder:
+                preset_values = ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"]
+            elif "nvenc" in encoder:
+                preset_values = ["default", "slow", "medium", "fast", "hp", "hq", "bd", "ll", "llhq", "llhp", "lossless", "losslesshp"]
+            elif "svt" in encoder or "libaom" in encoder:
+                preset_values = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]
+            elif "vpx" in encoder:
+                preset_values = ["best", "good", "rt"]
+            else:
+                preset_values = ["ultrafast", "fast", "medium", "slow", "veryslow"]
+                
+            # Mettre à jour le combobox des presets s'il existe
+            if hasattr(self, 'quality_entry') and hasattr(self.quality_entry, 'config'):
+                self.quality_entry['values'] = preset_values
+                if preset_values and not self.preset_var.get():
+                    self.preset_var.set("medium" if "medium" in preset_values else preset_values[len(preset_values)//2])
 
     def _update_media_type_ui(self, media_type):
-        """Met à jour l'interface selon le type de média sélectionné"""
+        """Met à jour l'interface utilisateur en fonction du type de média."""
+        # Cacher/afficher les sections selon le type de média
         if media_type == "video":
-            # Afficher les contrôles vidéo
-            self.mode_row.pack(fill="x", pady=(0, 8), before=self.mode_row.master.children[list(self.mode_row.master.children.keys())[0]])
-            self.resolution_combo.pack(side="left", padx=(0, 10))
-            self.image_res_frame.pack_forget()
-            # Appliquer le mode vidéo actuel
-            self._on_video_mode_change()
-            # Afficher les contrôles de recadrage et de prévisualisation
-            self.crop_frame.pack(side="left", padx=(10, 0))
-            self.preview_row.pack(fill="x", pady=(8, 0))
+            # Afficher toutes les sections pour vidéo
+            self._show_frame(self.transform_frame)
+            self._show_frame(self.quality_frame)
+            self._show_frame(self.hdr_frame)
             
-        elif media_type == "image":
-            # Masquer les contrôles vidéo, afficher les contrôles image
-            self.mode_row.pack_forget()
-            self.resolution_combo.pack_forget()
-            self.image_res_frame.pack(side="left", padx=(10, 0))
-            # Forcer le mode qualité pour les images
-            self.quality_entry.pack(side="left", padx=(0, 10))
-            self.cq_entry.pack_forget()
-            self.bitrate_label.pack_forget()
-            self.bitrate_entry.pack_forget()
-            self.multipass_check.pack_forget()
-            # Masquer les contrôles de recadrage et de prévisualisation
-            self.crop_frame.pack_forget()
-            self.preview_row.pack_forget()
+            # Configurer les presets vidéo
+            self._update_quality_presets_for_video()
             
         elif media_type == "audio":
-            # Masquer tous les contrôles de résolution et mode vidéo
-            self.mode_row.pack_forget()
-            self.resolution_combo.pack_forget()
-            self.image_res_frame.pack_forget()
-            # Configuration audio basique
-            self.quality_entry.pack(side="left", padx=(0, 10))
-            self.cq_entry.pack_forget()
-            self.bitrate_label.pack_forget()
-            self.bitrate_entry.pack_forget()
-            self.multipass_check.pack_forget()
-            # Masquer les contrôles de recadrage et de prévisualisation
-            self.crop_frame.pack_forget()
-            self.preview_row.pack_forget()
-        
-        # Obtenir l'encodeur actuel à partir de la variable globale avec une valeur par défaut
-        encoder_display = self.global_encoder_var.get()
-        encoder = ""
-        if encoder_display:
-            try:
-                encoder = self._get_encoder_name_from_display(encoder_display).lower()
-            except Exception:
-                encoder = ""
-        
-        if media_type == "video":
-            # Déterminer le type de qualité basé sur l'encodeur
-            if any(hw in encoder for hw in ["nvenc", "qsv", "amf", "videotoolbox"]):
-                # Encodeurs hardware - utiliser CQ/qualité appropriée
-                if "nvenc" in encoder:
-                    self.quality_entry.config(state="disabled")
-                    self.quality_var.set("")
-                    self.cq_entry.config(state="normal")
-                    self.cq_var.set(self.cq_var.get() or "23")
-                    self.preset_combo_quality.config(state="readonly")
-                    self.preset_combo_quality['values'] = ["p1", "p2", "p3", "p4", "p5", "p6", "p7"]
-                    self.preset_var.set(self.preset_var.get() or "p4")
-                elif "qsv" in encoder:
-                    self.quality_entry.config(state="disabled")
-                    self.quality_var.set("")
-                    self.cq_entry.config(state="normal")
-                    self.cq_var.set(self.cq_var.get() or "23")
-                    self.preset_combo_quality.config(state="readonly")
-                    self.preset_combo_quality['values'] = ["veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"]
-                    self.preset_var.set(self.preset_var.get() or "medium")
-                elif "amf" in encoder:
-                    self.quality_entry.config(state="disabled")
-                    self.quality_var.set("")
-                    self.cq_entry.config(state="normal")
-                    self.cq_var.set(self.cq_var.get() or "23")
-                    self.preset_combo_quality.config(state="readonly")
-                    self.preset_combo_quality['values'] = ["speed", "balanced", "quality"]
-                    self.preset_var.set(self.preset_var.get() or "balanced")
-                elif "videotoolbox" in encoder:
-                    self.quality_entry.config(state="disabled")
-                    self.quality_var.set("")
-                    self.cq_entry.config(state="normal")
-                    self.cq_var.set(self.cq_var.get() or "23")
-                    self.preset_combo_quality.config(state="disabled")
-                    self.preset_var.set("")
-            elif any(sw in encoder for sw in ["x264", "x265", "libx264", "libx265"]):
-                # Encodeurs software x264/x265 - CRF + presets
-                self.quality_entry.config(state="normal")
-                self.quality_var.set(self.quality_var.get() or "23")
-                self.cq_entry.config(state="disabled")
-                self.cq_var.set("")
-                self.preset_combo_quality.config(state="readonly")
-                self.preset_combo_quality['values'] = ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow", "placebo"]
-                self.preset_var.set(self.preset_var.get() or "medium")
-            elif any(av1 in encoder for av1 in ["av1", "svt-av1", "aom"]):
-                # Encodeurs AV1
-                self.quality_entry.config(state="normal")
-                self.quality_var.set(self.quality_var.get() or "28")
-                self.cq_entry.config(state="disabled")
-                self.cq_var.set("")
-                self.preset_combo_quality.config(state="readonly")
-                self.preset_combo_quality['values'] = ["0", "1", "2", "3", "4", "5", "6", "7", "8"]
-                self.preset_var.set(self.preset_var.get() or "4")
-            elif "vp9" in encoder:
-                # VP9
-                self.quality_entry.config(state="normal")
-                self.quality_var.set(self.quality_var.get() or "28")
-                self.cq_entry.config(state="disabled")
-                self.cq_var.set("")
-                self.preset_combo_quality.config(state="disabled")
-                self.preset_var.set("")
-            else:
-                # Autres encodeurs vidéo
-                self.quality_entry.config(state="normal")
-                self.quality_var.set(self.quality_var.get() or "23")
-                self.cq_entry.config(state="disabled")
-                self.cq_var.set("")
-                self.preset_combo_quality.config(state="disabled")
-                self.preset_var.set("")
-                
-        elif media_type == "audio":
-            # Encodeurs audio - CQ non applicable
-            self.cq_entry.config(state="disabled")
-            self.cq_var.set("")
-            if "flac" in encoder:
-                self.quality_entry.config(state="normal")
-                self.quality_var.set(self.quality_var.get() or "5")
-                self.preset_combo_quality.config(state="disabled")
-                self.preset_var.set("")
-            elif any(lossy in encoder for lossy in ["aac", "mp3", "opus", "vorbis"]):
-                # Pour les codecs avec perte, utiliser un sélecteur de bitrate
-                self.quality_entry.config(state="disabled")
-                self.quality_var.set("")
-                self.preset_combo_quality.config(state="readonly")
-                # Configurer les bitrates communs selon le codec
-                if "aac" in encoder:
-                    bitrates = ["96k", "128k", "192k", "256k", "320k"]
-                elif "mp3" in encoder:
-                    bitrates = ["96k", "128k", "160k", "192k", "256k", "320k"]
-                elif "opus" in encoder:
-                    bitrates = ["64k", "96k", "128k", "160k", "192k", "256k"]
-                elif "vorbis" in encoder:
-                    bitrates = ["96k", "128k", "160k", "192k", "256k", "320k"]
-                else:
-                    bitrates = ["128k", "192k", "256k", "320k"]
-                
-                self.preset_combo_quality['values'] = bitrates
-                self.preset_var.set(self.preset_var.get() or "128k")
-            else:
-                self.quality_entry.config(state="normal")
-                self.quality_var.set(self.quality_var.get() or "128")
-                self.preset_combo_quality.config(state="disabled")
-                self.preset_var.set("")
-                
+            # Cacher résolution/rognage et HDR pour audio
+            self._hide_frame(self.transform_frame)
+            self._hide_frame(self.hdr_frame)
+            self._show_frame(self.quality_frame)
+            
+            # Configurer les presets audio
+            self._update_quality_presets_for_audio()
+            
         elif media_type == "image":
-            # Encodeurs image - CQ non applicable
-            self.cq_entry.config(state="disabled")
-            self.cq_var.set("")
-            if any(img in encoder for img in ["jpeg", "webp", "avif", "jpegxl", "jxl"]):
-                self.quality_entry.config(state="normal")
-                self.quality_var.set(self.quality_var.get() or "90")
-                self.preset_combo_quality.config(state="disabled")
-                self.preset_var.set("")
-            elif "png" in encoder:
-                self.quality_entry.config(state="disabled")
-                self.quality_var.set("")
-                self.preset_combo_quality.config(state="disabled")
-                self.preset_var.set("")
-            else:
-                self.quality_entry.config(state="normal")
-                self.quality_var.set(self.quality_var.get() or "90")
-                self.preset_combo_quality.config(state="disabled")
-                self.preset_var.set("")
-        else:
-            # Mode non défini
-            self.quality_entry.config(state="disabled")
-            self.quality_var.set("")
-            self.cq_entry.config(state="disabled")
-            self.cq_var.set("")
-            self.preset_combo_quality.config(state="disabled")
-            self.preset_var.set("")
+            # Afficher résolution mais pas HDR pour image
+            self._show_frame(self.transform_frame)
+            self._show_frame(self.quality_frame)
+            self._hide_frame(self.hdr_frame)
+            
+            # Configurer les presets image
+            self._update_quality_presets_for_image()
+    
+    def _show_frame(self, frame):
+        """Affiche un frame s'il existe."""
+        if frame and hasattr(frame, 'pack'):
+            frame.pack(fill=tk.X, pady=(0, 5))
+    
+    def _hide_frame(self, frame):
+        """Cache un frame s'il existe."""
+        if frame and hasattr(frame, 'pack_forget'):
+            frame.pack_forget()
+    
+    def _update_quality_presets_for_video(self):
+        """Met à jour les options de qualité pour vidéo."""
+        # Réafficher tous les éléments pour la vidéo
+        self.video_mode_radio_quality.config(text="Qualité Constante (CQ)")
+        self.video_mode_radio_quality.grid(row=0, column=0, sticky="w")
+        self.cq_entry.grid(row=0, column=1, sticky="w")
+        
+        self.video_mode_radio_bitrate.config(text="Bitrate (kbps)")
+        self.video_mode_radio_bitrate.grid(row=1, column=0, sticky="w")
+        self.bitrate_entry.grid(row=1, column=1, sticky="w")
+        self.multipass_check.grid(row=1, column=2, sticky="w")
+        
+        # Label approprié pour preset vidéo
+        self.preset_label.config(text="Preset Encodeur:")
+        
+        # Remettre les presets par défaut sans appeler _update_quality_preset_controls
+        # pour éviter la récursion
+    
+    def _update_quality_presets_for_audio(self):
+        """Met à jour les options de qualité pour audio."""
+        # Cacher CQ et afficher seulement bitrate
+        self.video_mode_radio_quality.grid_remove()
+        self.cq_entry.grid_remove()
+        
+        # Garder seulement bitrate mais sans multipass
+        self.video_mode_radio_bitrate.config(text="Bitrate Audio (kbps)")
+        self.video_mode_radio_bitrate.grid(row=0, column=0, sticky="w")
+        self.bitrate_entry.grid(row=0, column=1, sticky="w")
+        self.multipass_check.grid_remove()
+        
+        # Label approprié pour preset audio
+        self.preset_label.config(text="Qualité Audio:")
+        
+        # Mettre des presets audio dans quality_entry
+        audio_presets = ["320", "256", "192", "128", "96", "64", "Custom"]
+        self.quality_entry['values'] = audio_presets
+        if not self.preset_var.get() or self.preset_var.get() not in audio_presets:
+            self.preset_var.set("192")
+        
+        # Forcer le mode bitrate pour audio
+        self.video_mode_var.set("bitrate")
+        if not self.bitrate_var.get() or self.bitrate_var.get() == "0":
+            self.bitrate_var.set("192")
+    
+    def _update_quality_presets_for_image(self):
+        """Met à jour les options de qualité pour image."""
+        # Cacher bitrate et multipass, garder seulement qualité
+        self.video_mode_radio_bitrate.grid_remove()
+        self.bitrate_entry.grid_remove()
+        self.multipass_check.grid_remove()
+        
+        # Garder seulement l'option qualité
+        self.video_mode_radio_quality.config(text="Qualité Image (%)")
+        self.video_mode_radio_quality.grid(row=0, column=0, sticky="w")
+        self.cq_entry.grid(row=0, column=1, sticky="w")
+        
+        # Label approprié pour preset image
+        self.preset_label.config(text="Qualité:")
+        
+        # Mettre des presets image dans quality_entry
+        image_presets = ["100", "95", "90", "85", "80", "75", "70", "Custom"]
+        self.quality_entry['values'] = image_presets
+        if not self.preset_var.get() or self.preset_var.get() not in image_presets:
+            self.preset_var.set("90")
+        
+        # Forcer le mode qualité pour image
+        self.video_mode_var.set("quality")
+        if not self.quality_var.get() or self.quality_var.get() == "0":
+            self.quality_var.set("90")
+
+    def _build_quality_section(self, parent_frame):
+        pass
 
     def _apply_quality_all_type(self):
         media_type = self.global_type_var.get()
@@ -1495,37 +1671,242 @@ class MainWindow:
         return display_text.split(' - ')[0] if ' - ' in display_text else display_text
 
     def _get_codec_from_display(self, display_text: str) -> str:
-        """Extrait le vrai nom du codec à partir du texte affiché"""
-        if hasattr(self, '_current_codec_choices'):
-            for display, codec in self._current_codec_choices:
-                if display == display_text:
-                    return codec
-        return display_text.lower()
+        return display_text.split(" (")[0]
+
+    def _build_ffmpeg_command(self, job: EncodeJob) -> list[str]:
+        """Construit la commande FFmpeg pour un job donné."""
+        cmd_prefix = ["ffmpeg", "-hide_banner"]
+
+        # --- GESTION DU DÉCOUPAGE (TRIMMING) ---
+        # -ss avant -i pour une recherche rapide (fast seek)
+        trim_start = job.trim_config.get("start")
+        if trim_start:
+            cmd_prefix.extend(["-ss", trim_start])
+
+        cmd = cmd_prefix + ["-i", str(job.src_path)]
+        
+        # -to après -i pour spécifier le point final basé sur le temps du fichier source
+        trim_end = job.trim_config.get("end")
+        if trim_end:
+            cmd.extend(["-to", trim_end])
+
+        # --- GESTION VIDÉO & GIF ---
+        # Si la destination est un .gif, on utilise la logique GIF
+        if job.mode == "gif":
+            # Basic GIF creation command
+            fps = job.gif_config.get("fps", 15)
+            resolution = job.gif_config.get("resolution", "540x-1")
+            video_filters = [f"fps={fps}", f"scale={resolution}:flags=lanczos"]
+            cmd.extend(["-vf", ",".join(video_filters)])
+        elif job.mode == "video":
+            cmd.extend(["-c:v", job.encoder])
+            
+            # Gestion HDR et color space
+            if self.hdr_detected_var.get():
+                if self.tonemap_var.get():
+                    # Tone mapping vers SDR
+                    tonemap_method = self.tonemap_method_var.get()
+                    tonemap_filter = f"zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap={tonemap_method}:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p"
+                    video_filters.append(tonemap_filter)
+                    # Forcer les paramètres de couleur SDR
+                    cmd.extend([
+                        "-color_primaries", "bt709",
+                        "-color_trc", "bt709", 
+                        "-colorspace", "bt709"
+                    ])
+                elif self.preserve_hdr_var.get():
+                    # Préserver HDR - copier les métadonnées de couleur
+                    cmd.extend([
+                        "-color_primaries", "copy",
+                        "-color_trc", "copy",
+                        "-colorspace", "copy"
+                    ])
+                    # Pour x265 et autres encodeurs supportant HDR
+                    if "x265" in job.encoder or "hevc" in job.encoder:
+                        cmd.extend(["-x265-params", "hdr-opt=1:repeat-headers=1:colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc"])
+                    elif "av1" in job.encoder:
+                        cmd.extend(["-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc"])
+            
+            if job.video_mode == "quality":
+                if "qsv" in job.encoder or "hevc_videotoolbox" in job.encoder:
+                    # Pour QSV et VideoToolbox, le CQ est un paramètre global, pas par flux
+                    cmd.extend(["-global_quality", job.cq_value])
+                else:
+                    cmd.extend(["-crf" if "x26" in job.encoder else "-cq:v", job.cq_value])
+            
+            elif job.video_mode == "bitrate":
+                cmd.extend(["-b:v", job.bitrate])
+                if job.multipass:
+                    # La logique multi-passe nécessiterait une approche plus complexe
+                    # (plusieurs exécutions de ffmpeg), non implémentée ici pour l'instant.
+                    # On se contente d'un encodage bitrate simple.
+                    pass
+            
+            if job.preset:
+                cmd.extend(["-preset", job.preset])
+        elif job.mode == "audio":
+            cmd.append("-vn") # Pas de vidéo
+
+        elif job.mode == "image":
+            cmd.append("-vn") # Pas de vidéo
+            # La logique d'image (longest_side, etc.) sera ajoutée ici
+
+        # --- GESTION AUDIO ---
+        audio_tracks_config = job.audio_config.get("tracks", [])
+        included_audio_tracks = [t for t in audio_tracks_config if t.get("included")]
+        
+        output_audio_stream_index = 0
+        if not included_audio_tracks:
+            cmd.append("-an")  # Pas de son
+        else:
+            # Mapper la vidéo si le mode n'est pas audio-seulement
+            if job.mode != "audio":
+                cmd.extend(["-map", "0:v?"])
+            
+            for track_config in included_audio_tracks:
+                source_stream_index = track_config["stream_index"]
+                cmd.extend(["-map", f"0:{source_stream_index}"])
+
+                action = track_config.get("action", "copy")
+                
+                if action == "copy":
+                    cmd.extend([f"-c:a:{output_audio_stream_index}", "copy"])
+                elif action == "encode":
+                    codec = job.audio_config.get("audio_codec", "aac")
+                    bitrate = job.audio_config.get("audio_bitrate", "192k")
+                    cmd.extend([
+                        f"-c:a:{output_audio_stream_index}", codec,
+                        f"-b:a:{output_audio_stream_index}", bitrate
+                    ])
+                
+                output_audio_stream_index += 1
+
+        # --- FILTRES VIDÉO ---
+        # Combinaison des filtres avancés et de l'incrustation des sous-titres
+        video_filters = []
+        # (La logique pour les filtres avancés sera ajoutée ici)
+        
+        # --- GESTION DES SOUS-TITRES ---
+        subtitle_mode = job.subtitle_config.get("mode", "copy")
+        external_sub_path = job.subtitle_config.get("external_path")
+
+        if subtitle_mode == "burn" and external_sub_path:
+            # Note: FFmpeg nécessite une attention particulière pour les chemins sur Windows.
+            # On échappe les backslashes et les deux-points.
+            escaped_path = str(external_sub_path).replace("\\", "\\\\").replace(":", "\\:")
+            video_filters.append(f"subtitles='{escaped_path}'")
+        elif subtitle_mode == "embed" and external_sub_path:
+            # Ajouter le fichier de sous-titres comme une nouvelle entrée
+            cmd.extend(["-i", str(external_sub_path)])
+            # Mapper la vidéo, l'audio, et la nouvelle piste de sous-titres (de l'input 1)
+            # cmd.extend(["-map", "0:v?", "-map", "0:a?"]) # Déjà fait plus haut pour l'audio
+            cmd.extend(["-map", "1:s?"])
+            # Spécifier le codec de sous-titres. 'mov_text' est compatible avec MP4.
+            container = job.dst_path.suffix.lower()
+            sub_codec = "srt" if container == ".mkv" else "mov_text"
+            cmd.extend(["-c:s", sub_codec])
+        elif subtitle_mode == "copy":
+             # Mapper les sous-titres de la source et les copier
+             cmd.extend(["-map", "0:s?", "-c:s", "copy"])
+        elif subtitle_mode == "remove":
+            cmd.append("-sn") # Supprimer tous les sous-titres
+
+        # Appliquer la chaîne de filtres vidéo si elle n'est pas vide
+        final_filter_string = self._build_filter_string(job)
+        if final_filter_string:
+            cmd.extend(["-vf", final_filter_string])
+
+        # Gérer le mapping des métadonnées et autres flux
+        cmd.extend(["-map_metadata", "0"]) # Copier les métadonnées globales
+
+        # --- GESTION GLOBALE ---
+        if job.custom_flags:
+            cmd.extend(job.custom_flags.split())
+        
+        cmd.extend(["-y", str(job.dst_path)])
+        
+        return cmd
 
     def _start_encoding(self):
-        """Commence l'encodage de tous les jobs en attente"""
-        # Vérifier qu'un dossier de sortie est sélectionné
-        if not self.output_folder.get() or self.output_folder.get().startswith("No output"):
-            messagebox.showwarning("No Output Folder", "Please select an output folder before starting encoding.")
-            return
-        
-        pending_jobs = [job for job in self.jobs if job.status == "pending"]
-        if not pending_jobs:
-            messagebox.showinfo("No Jobs", "No pending jobs to encode.")
+        if self.is_running:
+            messagebox.showwarning("Already Running", "Encoding is already in progress.")
             return
 
-        # Mettre à jour l'état des boutons de contrôle
-        self._update_control_buttons_state("encoding")
+        if not self.jobs:
+            messagebox.showinfo("Empty Queue", "The encoding queue is empty.")
+            return
+
+        self.is_running = True
+        self._update_control_buttons_state("running")
         
-        # Démarrer les pools de workers
-        self.pool.start()
+        for job in self.jobs:
+            if job.status == "pending":
+                # Appliquer les réglages de l'UI au job avant de construire la commande
+                self._apply_ui_settings_to_job(job)
+                command = self._build_ffmpeg_command(job)
+                self.pool.submit_job(job, command)
+
+    def _apply_ui_settings_to_job(self, job: EncodeJob):
+        """Applique les paramètres actuels de l'interface utilisateur à un objet job."""
+        # Cette fonction s'assure que les derniers réglages de l'UI sont appliqués
+        # à un job juste avant son lancement.
         
-        # Soumettre les jobs aux pools appropriés
-        for job in pending_jobs:
-            self.pool.submit(job)
+        # Codec et encodeur
+        job.codec = self._get_codec_from_display(self.global_codec_var.get())
+        job.encoder = self._get_encoder_name_from_display(self.global_encoder_var.get())
+        job.container = self._get_container_from_display(self.container_var.get())
+        
+        # Qualité et preset
+        job.quality = self.quality_var.get()
+        job.cq_value = self.cq_var.get()
+        job.preset = self.preset_var.get()
+        job.video_mode = self.video_mode_var.get()
+        job.bitrate = self.bitrate_var.get() + "k" if self.bitrate_var.get() else "4000k"
+        job.multipass = self.multipass_var.get()
+        job.custom_flags = self.custom_flags_var.get()
+        
+        # Sous-titres
+        if hasattr(job, 'subtitle_config'):
+            job.subtitle_config["mode"] = self.subtitle_mode_var.get()
+            job.subtitle_config["external_path"] = self.subtitle_path_var.get() if self.subtitle_path_var.get() else None
+
+        # Découpage
+        if hasattr(job, 'trim_config'):
+            job.trim_config["start"] = self.trim_start_var.get()
+            job.trim_config["end"] = self.trim_end_var.get()
+
+        # GIF (variables optionnelles)
+        if hasattr(self, 'gif_fps_var') and hasattr(job, 'gif_config'):
+            job.gif_config["fps"] = self.gif_fps_var.get()
+        if hasattr(self, 'gif_resolution_var') and hasattr(job, 'gif_config'):
+            job.gif_config["resolution"] = self.gif_resolution_var.get()
+        
+        # Résolution et filtres
+        resolution = self.resolution_var_settings.get()
+        if resolution != "Keep Original" and hasattr(job, 'filters'):
+            if resolution == "Custom":
+                # Gérer résolution personnalisée
+                pass
+            else:
+                # Extraire width x height depuis les valeurs prédéfinies
+                try:
+                    res_part = resolution.split(' ')[0]  # "1920x1080" depuis "1920x1080 (1080p)"
+                    if 'x' in res_part:
+                        width, height = res_part.split('x')
+                        job.filters["scale_width"] = int(width)
+                        job.filters["scale_height"] = int(height)
+                except:
+                    pass
+        
+        # Rognage (crop)
+        if hasattr(job, 'filters'):
+            job.filters["crop_top"] = int(self.crop_top_var.get() or 0)
+            job.filters["crop_bottom"] = int(self.crop_bottom_var.get() or 0)
+            job.filters["crop_left"] = int(self.crop_left_var.get() or 0)
+            job.filters["crop_right"] = int(self.crop_right_var.get() or 0)
 
     def _update_control_buttons_state(self, mode: str):
-        """Met à jour l'état des boutons de contrôle selon le mode"""
+        """Met à jour l'état des boutons de contrôle (Start, Pause, etc.)"""
         if mode == "idle":
             # Aucun encodage en cours - vérifier s'il y a des jobs pending
             pending_jobs = [job for job in self.jobs if job.status == "pending"]
@@ -1612,6 +1993,10 @@ class MainWindow:
                 values[4] = status
             self.tree.item(iid, values=values)
         self._update_overall_progress()
+
+        # Vérifier si tous les jobs sont terminés
+        if self.is_running and all(j.status in ["done", "error", "cancelled"] for j in self.jobs):
+            self._on_all_jobs_finished()
 
     def _update_overall_progress(self):
         if not self.jobs:
@@ -1727,6 +2112,52 @@ class MainWindow:
                 # Mettre à jour l'état des boutons si aucun job n'est actif
                 if not any(j.status in ["running", "paused"] for j in self.jobs):
                     self._update_control_buttons_state("idle")
+
+    def _on_all_jobs_finished(self):
+        """Appelée quand tous les jobs de la file sont terminés."""
+        self.is_running = False
+        self._update_control_buttons_state("idle")
+        self._show_encoding_completion_notification()
+
+        action = self.post_encode_action_var.get()
+        if action == "rien":
+            return
+
+        if messagebox.askyesno("Action Post-Encodage", f"Tous les encodages sont terminés.\nVoulez-vous vraiment '{action}' l'ordinateur ?"):
+            self._execute_post_encode_action(action)
+
+    def _execute_post_encode_action(self, action: str):
+        """Exécute la commande système pour l'action post-encodage."""
+        import platform, subprocess
+        
+        system = platform.system().lower()
+        command = ""
+
+        if action == "eteindre":
+            if system == "windows":
+                command = "shutdown /s /t 1"
+            elif system == "darwin": # macOS
+                command = "osascript -e 'tell app \"System Events\" to shut down'"
+            else: # Linux
+                command = "shutdown -h now"
+        elif action == "veille":
+            if system == "windows":
+                command = "rundll32.exe powrprof.dll,SetSuspendState 0,1,1"
+            elif system == "darwin":
+                command = "pmset sleepnow"
+            else: # Linux
+                command = "systemctl suspend"
+        
+        if command:
+            try:
+                # La commande est affichée mais pas exécutée pour la sécurité.
+                # Pour activer, décommentez la ligne ci-dessous.
+                messagebox.showinfo("Action Post-Encodage", f"L'action '{action}' serait exécutée avec la commande :\n{command}")
+                # subprocess.run(command.split(), check=True)
+            except Exception as e:
+                messagebox.showerror("Erreur d'action", f"Impossible d'exécuter l'action '{action}':\n{e}")
+        else:
+            messagebox.showwarning("Action non supportée", f"L'action '{action}' n'est pas supportée sur {system}.")
 
     def _setup_drag_drop(self):
         """Configure les zones de drop pour le drag & drop"""
@@ -2104,6 +2535,45 @@ class MainWindow:
                 except:
                     pass
             
+            # Détection HDR
+            hdr_detected = False
+            hdr_info = "SDR"
+            color_space = video_stream.get('color_space', '')
+            color_transfer = video_stream.get('color_transfer', '')
+            color_primaries = video_stream.get('color_primaries', '')
+            
+            # Vérifier les indicateurs HDR
+            hdr_indicators = [
+                'bt2020',  # Rec. 2020 color space
+                'smpte2084',  # PQ (HDR10)
+                'arib-std-b67',  # HLG (Hybrid Log-Gamma)
+                'bt2100'  # ITU-R BT.2100
+            ]
+            
+            if any(indicator in str(color_space).lower() for indicator in hdr_indicators):
+                hdr_detected = True
+                hdr_info = "HDR10"
+            elif any(indicator in str(color_transfer).lower() for indicator in hdr_indicators):
+                hdr_detected = True
+                if 'arib-std-b67' in str(color_transfer).lower():
+                    hdr_info = "HLG"
+                else:
+                    hdr_info = "HDR10"
+            elif any(indicator in str(color_primaries).lower() for indicator in hdr_indicators):
+                hdr_detected = True
+                hdr_info = "HDR"
+            
+            # Mettre à jour l'interface HDR
+            self.hdr_detected_var.set(hdr_detected)
+            if hdr_detected:
+                self.root.after_idle(lambda: self.hdr_status_label.config(text=hdr_info, foreground="orange"))
+                self.root.after_idle(lambda: self.preserve_hdr_check.config(state="normal"))
+                self.root.after_idle(lambda: self.tonemap_check.config(state="normal"))
+            else:
+                self.root.after_idle(lambda: self.hdr_status_label.config(text="SDR", foreground="gray"))
+                self.root.after_idle(lambda: self.preserve_hdr_check.config(state="disabled"))
+                self.root.after_idle(lambda: self.tonemap_check.config(state="disabled"))
+            
             info = {
                 "Résolution": f"{width}x{height}",
                 "Ratio d'aspect": aspect_ratio,
@@ -2112,6 +2582,9 @@ class MainWindow:
                 "Codec Vidéo": video_stream.get('codec_long_name', video_stream.get('codec_name', 'N/A')),
                 "Débit Vidéo": format_bitrate(video_stream.get('bit_rate', 'N/A')),
                 "Format Pixel": video_stream.get('pix_fmt', 'N/A'),
+                "HDR/Couleur": hdr_info,
+                "Espace Couleur": color_space if color_space else 'N/A',
+                "Transfert": color_transfer if color_transfer else 'N/A',
                 "Taille Fichier": format_file_size(format_info.get('size', 'N/A')),
             }
             
@@ -2326,11 +2799,18 @@ class MainWindow:
 
         # Bind mousewheel pour le scrolling
         def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        
-        canvas.bind("<MouseWheel>", _on_mousewheel)  # Windows
-        canvas.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))  # Linux
-        canvas.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))   # Linux
+            # La direction et l'amplitude du défilement varient selon la plateforme
+            if hasattr(event, 'delta') and event.delta != 0:
+                canvas.yview_scroll(-1 * (event.delta // 120) if sys.platform == 'win32' else -1 * event.delta, "units")
+            elif hasattr(event, 'num'):
+                if event.num == 4:
+                    canvas.yview_scroll(-1, "units")
+                elif event.num == 5:
+                    canvas.yview_scroll(1, "units")
+
+        canvas.bind("<MouseWheel>", _on_mousewheel)
+        canvas.bind("<Button-4>", _on_mousewheel)
+        canvas.bind("<Button-5>", _on_mousewheel)
 
     def _clear_inspector(self):
         for widget in self.inspector_info_frame.winfo_children():
@@ -2396,84 +2876,66 @@ class MainWindow:
                 self.resolution_var_settings.set("1280x720 (720p)")
 
     def _render_preview_frame(self):
-        """Rend une frame de prévisualisation basée sur le timestamp saisi"""
-        # Obtenir le fichier sélectionné dans les paramètres d'encodage
-        selected_filename = self.selected_file_var.get()
-        if selected_filename == "No file selected":
-            self.preview_image_label.config(text="No file selected for preview")
-            return
-        
-        # Trouver le job correspondant
-        selected_job = None
-        for job_id, job_data in self.job_rows.items():
-            job = job_data["job"]
-            if job.src_path.name == selected_filename:
-                selected_job = job
-                break
-        
-        if not selected_job:
-            self.preview_image_label.config(text="Selected file not found in queue")
-            return
-        
-        # Aperçu uniquement disponible pour les vidéos
-        if selected_job.mode != "video":
-            self.preview_image_label.config(text="Preview available for video files only")
+        """Génère et affiche une image de prévisualisation avec les filtres actuels."""
+        selected_item = self.tree.selection()
+        if not selected_item:
+            messagebox.showwarning("No Selection", "Please select a job to preview.")
             return
 
-        timestamp = self.timestamp_var.get()
-        
-        # Vérifier si PIL est disponible pour afficher l'image
-        try:
-            from PIL import Image, ImageTk
-        except ImportError:
-            self.preview_image_label.config(text="PIL not installed, preview unavailable")
+        job = next((j for j in self.jobs if str(id(j)) == selected_item[0]), None)
+        if not job:
             return
+
+        # Appliquer les réglages de l'UI au job pour avoir les filtres à jour
+        self._apply_ui_settings_to_job(job)
         
-        # Créer un fichier temporaire pour la frame
-        import tempfile
-        import subprocess
-        import os
+        # Construire la chaîne de filtres
+        filter_string = self._build_filter_string(job)
         
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
-            temp_path = temp_file.name
-        
-        # Construire la commande FFmpeg pour extraire une frame avec les paramètres de recadrage
-        crop_left = self.crop_left_var.get() or "0"
-        crop_right = self.crop_right_var.get() or "0"
-        crop_top = self.crop_top_var.get() or "0"
-        crop_bottom = self.crop_bottom_var.get() or "0"
-        
-        ffmpeg_cmd = [
-            "ffmpeg",
-            "-i", str(selected_job.src_path),
-            "-ss", timestamp,
-            "-vframes", "1",
-            "-c:v", "png"
-        ]
-        
-        # Ajouter le filtre de recadrage si nécessaire
-        if any(val != "0" for val in [crop_left, crop_right, crop_top, crop_bottom]):
-            crop_filter = f"crop=iw-{crop_left}-{crop_right}:ih-{crop_top}-{crop_bottom}:{crop_left}:{crop_top}"
-            ffmpeg_cmd.extend(["-vf", crop_filter])
-        
-        ffmpeg_cmd.extend(["-y", temp_path])
-        
+        timestamp = self.timestamp_var.get()
+
         try:
-            subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            cmd = [ "ffmpeg", "-ss", timestamp, "-i", str(job.src_path) ]
+            if filter_string:
+                cmd.extend(["-vf", filter_string])
             
-            # Charger et afficher l'image
-            img = Image.open(temp_path)
-            # Redimensionner l'image pour l'aperçu (par exemple, 300x200 max)
-            img.thumbnail((300, 200))
-            photo = ImageTk.PhotoImage(img)
+            cmd.extend(["-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"])
+            
+            # (le reste de la logique d'exécution de la commande)
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stdout, stderr = process.communicate()
+            if process.returncode != 0:
+                raise RuntimeError(f"FFmpeg error: {stderr.decode('utf-8')}")
+            
+            from PIL import Image, ImageTk
+            import io
+            
+            image = Image.open(io.BytesIO(stdout))
+            image.thumbnail((300, 200)) # Garder une taille raisonnable
+            photo = ImageTk.PhotoImage(image)
+            
             self.preview_image_label.config(image=photo, text="")
-            self.preview_image_label.image = photo  # Garder une référence
+            self.preview_image_label.image = photo
+
         except Exception as e:
-            self.preview_image_label.config(text=f"Error rendering frame: {str(e)}")
-        finally:
-            # Nettoyer le fichier temporaire
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
+            messagebox.showerror("Preview Error", f"Failed to render preview frame: {e}")
+
+    def _build_filter_string(self, job: EncodeJob) -> str:
+        """Construit la chaîne de filtres (-vf) pour un job, incluant l'incrustation des sous-titres."""
+        filters = []
+        
+        # Exemple pour un filtre. La vraie logique viendrait de job.filters
+        # if job.filters.get("brightness") != 0:
+        #     filters.append(f"eq=brightness={job.filters['brightness']/200.0}")
+
+        # Logique d'incrustation des sous-titres
+        subtitle_mode = job.subtitle_config.get("mode", "copy")
+        external_sub_path = job.subtitle_config.get("external_path")
+        if subtitle_mode == "burn" and external_sub_path:
+            escaped_path = str(external_sub_path).replace("\\", "\\\\").replace(":", "\\:")
+            filters.append(f"subtitles='{escaped_path}'")
+            
+        return ",".join(filters)
 
     def _preview_previous_frame(self):
         """Navigue à la frame précédente basée sur le timestamp actuel"""
@@ -2510,3 +2972,102 @@ class MainWindow:
         minutes = (seconds % 3600) // 60
         secs = seconds % 60
         return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+    def _on_subtitle_mode_change(self):
+        """Active ou désactive le champ du fichier externe selon le mode."""
+        mode = self.subtitle_mode_var.get()
+        state = "normal" if mode in ["embed", "burn"] else "disabled"
+        
+        for child in self.external_subtitle_frame.winfo_children():
+            child.configure(state=state)
+
+    def _browse_subtitle_file(self):
+        """Ouvre une boîte de dialogue pour choisir un fichier de sous-titres."""
+        filetypes = [
+            ("Subtitle Files", "*.srt *.ass *.ssa *.vtt"),
+            ("All files", "*.*")
+        ]
+        filepath = filedialog.askopenfilename(title="Select a Subtitle File", filetypes=filetypes)
+        if filepath:
+            self.subtitle_path_var.set(filepath)
+
+    def _add_from_url(self):
+        """Ouvre une boîte de dialogue pour entrer une URL et la télécharger."""
+        url = tk.simpledialog.askstring("Add from URL", "Enter a video URL:", parent=self.root)
+        if not url:
+            return
+
+        # Le téléchargement doit se faire en arrière-plan pour ne pas geler l'UI
+        download_thread = threading.Thread(target=self._download_and_enqueue_url, args=(url,), daemon=True)
+        download_thread.start()
+
+    def _download_and_enqueue_url(self, url: str):
+        """Télécharge une vidéo depuis une URL en utilisant yt-dlp."""
+        output_dir = self.output_folder.get()
+        if not output_dir or output_dir.startswith("No output"):
+            # Si aucun dossier de sortie n'est défini, on ne peut pas télécharger
+            messagebox.showerror("Output Folder Required", "Please select an output folder before downloading from a URL.")
+            return
+        
+        download_path = Path(output_dir) / "downloads"
+        download_path.mkdir(exist_ok=True)
+        
+        # Mettre à jour un statut dans l'UI (thread-safe)
+        self.root.after(0, lambda: self.watch_status.config(text=f"Status: Downloading {url[:50]}..."))
+        
+        try:
+            # Utiliser yt-dlp pour télécharger et récupérer le nom du fichier
+            cmd = [
+                "yt-dlp",
+                "--print", "filename",
+                "-o", str(download_path / "%(title)s.%(ext)s"),
+                url
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            
+            output_filename = result.stdout.strip()
+            if not output_filename:
+                raise ValueError("yt-dlp did not return a filename.")
+                
+            # Ajouter le fichier téléchargé à la file d'attente (thread-safe)
+            self.root.after(0, self._enqueue_paths, [Path(output_filename)])
+            self.root.after(0, lambda: self.watch_status.config(text="Status: Download complete."))
+
+        except subprocess.CalledProcessError as e:
+            error_message = f"Failed to download from URL.\nError: {e.stderr}"
+            self.root.after(0, lambda: self.watch_status.config(text="Status: Download failed."))
+            messagebox.showerror("Download Error", error_message)
+        except Exception as e:
+            error_message = f"An unexpected error occurred during download: {e}"
+            self.root.after(0, lambda: self.watch_status.config(text="Status: Download failed."))
+            messagebox.showerror("Download Error", error_message)
+
+    def _on_megapixels_change(self, event=None):
+        if self.megapixels_var.get() == "Custom":
+            self.custom_mp_entry.config(state="normal")
+        else:
+            self.custom_mp_entry.config(state="disabled")
+
+    def _on_media_type_change(self, event=None):
+        """Met à jour les choix de l'UI quand le type de média change."""
+        self._update_codec_choices()
+
+    def _on_video_mode_change(self):
+        """Gère le changement entre modes qualité et bitrate - utilise grid au lieu de pack"""
+        mode = self.video_mode_var.get()
+        if mode == "quality":
+            # Afficher les contrôles de qualité
+            if hasattr(self, 'cq_entry'):
+                self.cq_entry.config(state="normal")
+            if hasattr(self, 'bitrate_entry'):
+                self.bitrate_entry.config(state="disabled")
+            if hasattr(self, 'multipass_check'):
+                self.multipass_check.config(state="disabled")
+        else:  # bitrate
+            # Afficher les contrôles de bitrate
+            if hasattr(self, 'cq_entry'):
+                self.cq_entry.config(state="disabled")
+            if hasattr(self, 'bitrate_entry'):
+                self.bitrate_entry.config(state="normal")
+            if hasattr(self, 'multipass_check'):
+                self.multipass_check.config(state="normal")
