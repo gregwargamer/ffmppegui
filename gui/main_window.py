@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from tkinter import (Tk, filedialog, ttk, Menu, messagebox, StringVar, BooleanVar, Text, Toplevel, IntVar, DoubleVar, simpledialog, Listbox, Scrollbar, Frame, Canvas, Checkbutton)
 import tkinter as tk
+from typing import Optional
 
 #j'ajoute dynamiquement le chemin racine du projet au PYTHONPATH
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -177,6 +178,8 @@ class MainWindow:
         # Initialiser les valeurs par défaut après que tous les éléments UI soient créés
         try:
             self._update_codec_choices()
+            # S'assurer que l'interface est mise à jour selon le type par défaut
+            self._update_media_type_ui(self.global_type_var.get())
         except Exception:
             # Ignorer les erreurs d'initialisation pour l'instant
             pass
@@ -1596,24 +1599,27 @@ class MainWindow:
             self._show_frame(self.transform_frame)
             self._show_frame(self.quality_frame)
             self._show_frame(self.hdr_frame)
+            self._show_frame(self.lut_frame)  # Afficher LUT et watermark pour vidéos
             
             # Configurer les presets vidéo
             self._update_quality_presets_for_video()
             
         elif media_type == "audio":
-            # Cacher résolution/rognage et HDR pour audio
+            # Cacher résolution/rognage, HDR, LUT et watermark pour audio
             self._hide_frame(self.transform_frame)
             self._hide_frame(self.hdr_frame)
+            self._hide_frame(self.lut_frame)  # Cacher LUT et watermark pour audio
             self._show_frame(self.quality_frame)
             
             # Configurer les presets audio
             self._update_quality_presets_for_audio()
             
         elif media_type == "image":
-            # Afficher résolution mais pas HDR pour image
+            # Afficher résolution mais pas HDR, LUT et watermark pour image
             self._show_frame(self.transform_frame)
             self._show_frame(self.quality_frame)
             self._hide_frame(self.hdr_frame)
+            self._hide_frame(self.lut_frame)  # Cacher LUT et watermark pour images
             
             # Configurer les presets image
             self._update_quality_presets_for_image()
@@ -2177,9 +2183,10 @@ class MainWindow:
             self.global_encoder_var.set(encoder_display_name) # This will trigger _on_encoder_change -> _update_quality_preset_controls
 
             # Set Container - after codec/encoder might have influenced it
-            container_display_name = job.container
+            # Les jobs ont leurs outputs avec des conteneurs, utilisons le premier output
+            container_display_name = job.outputs[0].container if job.outputs else "mp4"
             for display, container_val in getattr(self, '_current_container_choices', []):
-                if container_val == job.container: # Assuming job.container stores the extension like 'mp4'
+                if container_val == container_display_name:
                     container_display_name = display
                     break
             self.container_var.set(container_display_name)
@@ -2609,7 +2616,7 @@ class MainWindow:
             self.pool.stop()
             # Pool needs to be restartable if user adds new jobs
             self.pool.threads.clear() # Clear old threads
-            self.pool.job_queue = خواندن # Re-initialize queue
+            # self.pool.job_queue = queue.Queue() # Re-initialize queue
             # self.pool.start() # Or start it when new jobs are added / encoding starts again
 
         
@@ -3617,10 +3624,10 @@ class MainWindow:
             wm_preview_filters = [f"scale=main_w*{output_to_preview.watermark_scale}:-1"]
             if output_to_preview.watermark_opacity < 1.0:
                 wm_preview_filters.append(f"format=rgba,colorchannelmixer=aa={output_to_preview.watermark_opacity}")
-            filter_complex_segments.append(f"[1:v]{','.join(wm_preview_filters)}[wm_prev]")
+            filter_complex_preview_segments.append(f"[1:v]{','.join(wm_preview_filters)}[wm_prev]")
 
             if preview_filters: # Main video filters
-                filter_complex_segments.append(f"[0:v]{','.join(preview_filters)}[v_prev_filtered]")
+                filter_complex_preview_segments.append(f"[0:v]{','.join(preview_filters)}[v_prev_filtered]")
                 current_preview_video_label = "[v_prev_filtered]"
             # else current_preview_video_label remains "[0:v]"
             
@@ -3630,9 +3637,9 @@ class MainWindow:
             elif pos == "bottom_left": xy_pos = f"x={pad}:y=main_h-overlay_h-{pad}"
             elif pos == "bottom_right": xy_pos = f"x=main_w-overlay_w-{pad}:y=main_h-overlay_h-{pad}"
             elif pos == "center": xy_pos = f"x=(main_w-overlay_w)/2:y=(main_h-overlay_h)/2"
-            filter_complex_segments.append(f"{current_preview_video_label}[wm_prev]overlay={xy_pos}")
+            filter_complex_preview_segments.append(f"{current_preview_video_label}[wm_prev]overlay={xy_pos}")
             
-            preview_cmd.extend(["-filter_complex", ";".join(filter_complex_segments)])
+            preview_cmd.extend(["-filter_complex", ";".join(filter_complex_preview_segments)])
 
         elif preview_filters: # No watermark, but other filters for preview
             preview_cmd.extend(["-vf", ",".join(preview_filters)])
@@ -3641,8 +3648,6 @@ class MainWindow:
 
         try:
             process = subprocess.Popen(preview_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            # (le reste de la logique d'exécution de la commande)
-            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             stdout, stderr = process.communicate()
             if process.returncode != 0:
                 raise RuntimeError(f"FFmpeg error: {stderr.decode('utf-8')}")

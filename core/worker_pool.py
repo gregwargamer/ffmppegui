@@ -3,7 +3,7 @@ import subprocess
 import threading
 import ffmpeg
 
-from core.encode_job import EncodeJob
+from core.encode_job import EncodeJob, OutputConfig
 
 
 def build_ffmpeg_stream(job: EncodeJob):
