@@ -196,6 +196,8 @@ class WorkerPool:
         self.job_queue = queue.Queue()
         self.threads = []
         self.running = False
+        import threading as _th
+        self._stop_event = _th.Event()
         self.progress_callback = progress_callback
         self.log_callback = log_callback
 
@@ -203,6 +205,7 @@ class WorkerPool:
         """Démarre les threads workers"""
         if not self.running:
             self.running = True
+            self._stop_event.clear()
             for i in range(self.max_workers):
                 thread = threading.Thread(target=self._worker, daemon=True)
                 thread.start()
@@ -211,6 +214,7 @@ class WorkerPool:
     def stop(self):
         """Arrête les workers proprement"""
         self.running = False
+        self._stop_event.set()
         # Ajouter des sentinelles pour débloquer les workers
         for _ in range(self.max_workers):
             self.job_queue.put(None)

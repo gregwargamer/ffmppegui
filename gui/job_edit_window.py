@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import Toplevel, ttk, StringVar, messagebox
 import copy # For duplicating OutputConfig
 import uuid # For new OutputConfig IDs
+from typing import Optional
 
 from core.encode_job import EncodeJob, OutputConfig
 from core.ffmpeg_helpers import FFmpegHelpers
@@ -511,6 +512,27 @@ class JobEditWindow:
         current_quality_val = self.oc_quality_var.get()
         new_default_quality = ""
 
+        audio_encoders = {"aac", "libfdk_aac", "mp3", "libmp3lame", "opus", "libopus", "vorbis", "libvorbis", "flac", "alac"}
+        video_indicators = ["x264", "x265", "libvpx", "svtav1", "aom", "prores", "dnxhd", "hevc", "h264", "vp9"]
+        image_encoders = {"png", "mjpeg", "libjpeg", "libwebp", "libwebp_anim", "libaom-av1", "libjxl", "libheif"}
+        inferred_mode = None
+        if selected_encoder in audio_encoders:
+            inferred_mode = "audio"
+        elif any(ind in selected_encoder for ind in video_indicators):
+            inferred_mode = "video"
+        elif selected_encoder in image_encoders:
+            inferred_mode = "image"
+        
+        # Si le mode déduit diffère du mode actuel, on bascule automatiquement le mode
+        if inferred_mode and inferred_mode != current_mode:
+            self.oc_mode_var.set(inferred_mode)
+            # On applique immédiatement le changement de mode pour mettre à jour l'UI
+            self._on_output_mode_change()
+            # Restaurer l'encodeur sélectionné car _on_output_mode_change l'a réinitialisé
+            self.oc_encoder_var.set(selected_encoder)
+            # Met à jour la variable locale pour que la suite de la fonction utilise le bon mode
+            current_mode = inferred_mode
+
         if current_mode == "video":
             quality_label_widget = self.video_quality_label
             if "x264" in selected_encoder or "x265" in selected_encoder or "libvpx" in selected_encoder or "svtav1" in selected_encoder or "aom" in selected_encoder:
@@ -538,7 +560,7 @@ class JobEditWindow:
             if "png" in selected_encoder:
                 new_label_text = "PNG Comp. (0-9):"
                 new_default_quality = "6"
-            elif selected_encoder in ["jpeg", "mjpeg", "webp", "libwebp", "libaom-av1", "libjxl", "hevc"]: # hevc for heic
+            elif selected_encoder in ["jpeg", "mjpeg", "webp", "libwebp", "libaom-av1", "libjxl", "hevc", "libheif"]:
                 new_label_text = "Quality % (0-100):"
                 new_default_quality = "90"
             else: # Other image

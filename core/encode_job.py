@@ -162,3 +162,104 @@ class EncodeJob:
 # which iterate over output_cfg.process.
 # The individual output_cfg.process, output_cfg.status, output_cfg.progress, output_cfg.is_paused
 # will be managed by the worker pool for each specific output task.
+
+    # === Backward-compatibility helpers ===
+    # Many parts of the GUI still expect single-output attributes on EncodeJob.
+    # To avoid crashing while the refactor is underway, expose shim properties
+    # that transparently map to the first OutputConfig in self.outputs.
+    # Les commentaires sont en français, conformément aux consignes.
+
+    #this part expose un accès rapide au premier OutputConfig
+    @property
+    def _first_output(self) -> Optional[OutputConfig]:
+        return self.outputs[0] if self.outputs else None
+
+    #this part gère l'attribut encoder historique
+    @property
+    def encoder(self) -> str:
+        return self._first_output.encoder if self._first_output else ""
+
+    @encoder.setter
+    def encoder(self, value: str):
+        if self._first_output:
+            self._first_output.encoder = value
+
+    #this part gère la qualité générique
+    @property
+    def quality(self) -> str:
+        return self._first_output.quality if self._first_output else ""
+
+    @quality.setter
+    def quality(self, value: str):
+        if self._first_output:
+            self._first_output.quality = value
+
+    #this part gère la valeur CQ/CRF spécifique
+    @property
+    def cq_value(self) -> str:
+        return self._first_output.cq_value if self._first_output else ""
+
+    @cq_value.setter
+    def cq_value(self, value: str):
+        if self._first_output:
+            self._first_output.cq_value = value
+
+    #this part gère le bitrate
+    @property
+    def bitrate(self) -> str:
+        return self._first_output.bitrate if self._first_output else ""
+
+    @bitrate.setter
+    def bitrate(self, value: str):
+        if self._first_output:
+            self._first_output.bitrate = value
+
+    #this part gère le preset
+    @property
+    def preset(self) -> str:
+        return self._first_output.preset if self._first_output else ""
+
+    @preset.setter
+    def preset(self, value: str):
+        if self._first_output:
+            self._first_output.preset = value
+
+    #this part gère les flags personnalisés
+    @property
+    def custom_flags(self) -> str:
+        return self._first_output.custom_flags if self._first_output else ""
+
+    @custom_flags.setter
+    def custom_flags(self, value: str):
+        if self._first_output:
+            self._first_output.custom_flags = value
+
+    #this part gère le mode vidéo/bitrate
+    @property
+    def video_mode(self) -> str:
+        return self._first_output.video_mode if self._first_output else "quality"
+
+    @video_mode.setter
+    def video_mode(self, value: str):
+        if self._first_output:
+            self._first_output.video_mode = value
+
+    #this part expose le dict des filtres
+    @property
+    def filters(self):
+        return self._first_output.filters if self._first_output else {}
+
+    # Les setters pour les dicts modifient directement la référence existante
+
+    #this part gère les sous-titres, trim, audio config
+    @property
+    def subtitle_config(self):
+        return self._first_output.subtitle_config if self._first_output else {}
+
+    @property
+    def trim_config(self):
+        return self._first_output.trim_config if self._first_output else {}
+
+    @property
+    def audio_config(self):
+        return self._first_output.audio_config if self._first_output else {}

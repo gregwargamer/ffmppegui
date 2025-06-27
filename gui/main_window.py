@@ -1526,7 +1526,7 @@ class MainWindow:
             'remux': ['copy'],  # Pour remux
             
             # Codecs audio
-            'aac': ['aac', 'libfdk_aac'],
+            'aac': ['aac', 'libfdk_aac', 'libfaac', 'aac_mf', 'aac_at'],
             'mp3': ['libmp3lame'],
             'opus': ['libopus'],
             'vorbis': ['libvorbis'],
@@ -1619,6 +1619,10 @@ class MainWindow:
             self.multipass_check.grid()
             self.preset_label.grid()
             self.quality_entry.grid() # This is the encoder preset combobox
+            # masquage des cadres non requis pour la vidéo
+            self._hide_frame(self.hdr_frame)
+            self._hide_frame(self.subtitle_frame)
+            self._hide_frame(self.lut_frame)
             
         elif media_type == "audio":
             # Hide video/image specific frames
@@ -1638,7 +1642,7 @@ class MainWindow:
             self._show_frame(self.transform_frame) # Resolution/Crop for images
             self._hide_frame(self.hdr_frame)       # No HDR UI for images here
             self._hide_frame(self.subtitle_frame)  # No subtitles for images
-            self._hide_frame(self.lut_frame)       # No LUT/Watermark UI for images here
+            self._show_frame(self.lut_frame)       # LUT/Watermark UI for images here
 
             self._show_frame(self.quality_frame) # Show quality frame, adapted for images
             
@@ -3968,16 +3972,29 @@ class MainWindow:
             # We re-purpose cq_entry for FLAC level, and bitrate_entry for bitrates.
             self.video_mode_radio_quality.config(text="Niveau FLAC (0-11):") # If FLAC
             self.video_mode_radio_bitrate.config(text="Bitrate Audio (kbps):") # For others
-
+            #this part masque ou affiche les champs qualité/bitrate selon l'encodeur audio sélectionné
             if "flac" in encoder:
-                self.video_mode_var.set("quality") # Use the "quality" radio for FLAC level
-                if not self.quality_var.get() or not self.quality_var.get().isdigit():
-                    self.quality_var.set("5") # Default FLAC level
-            else: # AAC, MP3, Opus etc.
-                self.video_mode_var.set("bitrate") # Use "bitrate" radio
-                if not self.bitrate_var.get() or not self.bitrate_var.get().endswith('k'):
-                    self.bitrate_var.set("128") # Default audio bitrate (will be suffixed with 'k' by save)
-            self._on_video_mode_change() # Refresh UI
+                # Montrer la saisie FLAC level, masquer bitrate
+                self.video_mode_radio_quality.grid(row=0, column=0, sticky="w")
+                self.cq_entry.grid(row=0, column=1, sticky="w")
+                self.video_mode_radio_bitrate.grid_remove()
+                self.bitrate_entry.grid_remove()
+                self.multipass_check.grid_remove()
+                self.video_mode_var.set("quality")
+                if not self.quality_var.get().isdigit():
+                    self.quality_var.set("5")
+            else:
+                # Montrer seulement bitrate pour AAC/MP3/Opus etc.
+                self.video_mode_radio_quality.grid_remove()
+                self.cq_entry.grid_remove()
+                self.video_mode_radio_bitrate.grid(row=0, column=0, sticky="w")
+                self.bitrate_entry.grid(row=0, column=1, sticky="w")
+                self.multipass_check.grid_remove()
+                self.video_mode_var.set("bitrate")
+                if not self.bitrate_var.get().isdigit():
+                    self.bitrate_var.set("128")
+            # Met à jour l'état activé/désactivé des entrées
+            self._on_video_mode_change()
 
         elif media_type == "image":
             # For images, usually a quality percentage or specific compression level (PNG)
@@ -4007,3 +4024,8 @@ class MainWindow:
     def _on_media_type_change(self, event=None):
         """Met à jour les choix de l'UI quand le type de média change."""
         media_type = self.global_type_var.get()
+
+    def _apply_ui_settings_to_job(self, job: EncodeJob):
+        """Applique les réglages UI actuels à toutes les sorties d'un EncodeJob (compatibilité ancienne API)."""
+        for output_cfg in job.outputs:
+            self._apply_ui_settings_to_output_config(output_cfg, job)
