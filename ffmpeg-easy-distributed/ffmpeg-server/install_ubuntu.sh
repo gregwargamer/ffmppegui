@@ -5,6 +5,9 @@
 
 set -e  # Arrêter en cas d'erreur
 
+# Obtenir le répertoire du script pour gérer les chemins relatifs de manière robuste
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+
 # Couleurs pour les messages
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -129,12 +132,30 @@ setup_directory() {
     chown "$USER_NAME:$USER_NAME" "$INSTALL_DIR"
     
     # Copier les fichiers du serveur
-    if [[ -f "main.py" ]]; then
-        print_info "Copie des fichiers du serveur"
-        cp -r . "$INSTALL_DIR/"
+    if [[ -f "$SCRIPT_DIR/main.py" ]]; then
+        print_info "Copie des fichiers du serveur (fichiers principaux)"
+        # Copier les éléments spécifiques au lieu de '.' pour éviter de copier le lien symbolique 'shared' problématique
+        # Utiliser SCRIPT_DIR pour s'assurer que les sources sont correctes
+        cp -r "$SCRIPT_DIR/core" "$SCRIPT_DIR/server" "$SCRIPT_DIR/main.py" "$SCRIPT_DIR/requirements.txt" \
+              "$SCRIPT_DIR/Dockerfile" "$SCRIPT_DIR/docker-compose.yml" \
+              "$SCRIPT_DIR/README_UBUNTU_INSTALL.md" "$SCRIPT_DIR/uninstall_ubuntu.sh" "$INSTALL_DIR/"
+
+        print_info "Suppression de l'ancien lien/fichier 'shared' dans $INSTALL_DIR s'il existe"
+        rm -rf "$INSTALL_DIR/shared"
+
+        # Le chemin vers ffmpeg-gui/shared est relatif au SCRIPT_DIR parent
+        GUI_SHARED_DIR="$SCRIPT_DIR/../ffmpeg-gui/shared"
+        print_info "Copie du répertoire 'shared' depuis $GUI_SHARED_DIR"
+        if [ -d "$GUI_SHARED_DIR" ]; then
+            cp -r "$GUI_SHARED_DIR" "$INSTALL_DIR/shared"
+            print_info "Répertoire 'shared' copié avec succès."
+        else
+            print_error "Répertoire source '$GUI_SHARED_DIR' non trouvé."
+        fi
+
         chown -R "$USER_NAME:$USER_NAME" "$INSTALL_DIR"
     else
-        print_error "Fichiers du serveur non trouvés. Exécutez ce script depuis le dossier ffmpeg-server/"
+        print_error "Fichier principal 'main.py' non trouvé dans $SCRIPT_DIR. Assurez-vous que le script est dans le bon répertoire."
     fi
 }
 
@@ -147,6 +168,7 @@ setup_python_environment() {
     # Installer les dépendances
     print_info "Installation des dépendances Python"
     sudo -u "$USER_NAME" "$INSTALL_DIR/venv/bin/pip" install --upgrade pip
+    # S'assurer que requirements.txt est trouvé dans INSTALL_DIR où il a été copié
     sudo -u "$USER_NAME" "$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt"
 }
 

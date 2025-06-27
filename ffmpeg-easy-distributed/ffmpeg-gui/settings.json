@@ -1,0 +1,21 @@
+{
+    "distributed": {
+        "auto_connect_servers": [
+            {
+                "name": "Ubuntu Test Server",
+                "ip": "192.168.0.2",
+                "port": 8765,
+                "enabled": true,
+                "id": "test-server-01"
+            }
+        ],
+        "default_timeout": 30,
+        "max_concurrent_jobs": 10,
+        "preferred_encoders": ["h264_nvenc", "libx264"]
+    },
+    "ui": {
+        "refresh_interval": 5,
+        "show_server_details": true,
+        "auto_select_best_server": true
+    }
+}

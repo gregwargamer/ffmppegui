@@ -1,0 +1,247 @@
+#!/bin/bash
+
+# Installer for FFmpeg Easy GUI on Ubuntu
+# Creates a user-local installation.
+
+set -e # Exit immediately if a command exits with a non-zero status.
+
+# --- Configuration ---
+APP_NAME="FFmpeg Easy GUI"
+INSTALL_BASE_DIR="$HOME/.local/share"
+LAUNCHER_BASE_DIR="$HOME/.local/bin"
+
+APP_ID="ffmpeg-easy-gui" # Used for directory names
+
+INSTALL_DIR="$INSTALL_BASE_DIR/$APP_ID"
+APP_CONTENT_DIR="$INSTALL_DIR/app" # Where actual app files go
+VENV_DIR="$INSTALL_DIR/venv"
+LAUNCHER_DIR="$LAUNCHER_BASE_DIR"
+LAUNCHER_NAME="$APP_ID"
+
+# --- Colors ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# --- Script Directory ---
+# Absolute path to the directory where this script is located.
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+
+# --- Helper Functions ---
+print_header() {
+    echo -e "${BLUE}================================${NC}"
+    echo -e "${BLUE}  $APP_NAME Installer${NC}"
+    echo -e "${BLUE}================================${NC}"
+    echo ""
+}
+
+print_step() {
+    echo -e "${GREEN}[STEP]${NC} $1"
+}
+
+print_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARN]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1" >&2
+    exit 1
+}
+
+# --- Main Functions (to be implemented) ---
+
+check_command() {
+    if ! command -v "$1" &> /dev/null; then
+        print_error "$1 command not found. Please install it first."
+    fi
+}
+
+install_system_dependencies() {
+    print_step "Installing system dependencies (requires sudo)"
+
+    REQUIRED_PACKAGES=("python3-tk" "python3-venv" "ffmpeg")
+    PACKAGES_TO_INSTALL=()
+
+    for pkg in "${REQUIRED_PACKAGES[@]}"; do
+        if ! dpkg -s "$pkg" &> /dev/null; then
+            print_info "$pkg is not installed. Adding to installation list."
+            PACKAGES_TO_INSTALL+=("$pkg")
+        else
+            print_info "$pkg is already installed."
+        fi
+    done
+
+    if [ ${#PACKAGES_TO_INSTALL[@]} -ne 0 ]; then
+        print_info "Updating package lists..."
+        if sudo apt-get update; then
+            print_info "Installing missing packages: ${PACKAGES_TO_INSTALL[*]}"
+            if ! sudo apt-get install -y "${PACKAGES_TO_INSTALL[@]}"; then
+                print_error "Failed to install system dependencies. Please try again."
+            fi
+            print_info "System dependencies installed successfully."
+        else
+            print_error "Failed to update package lists. Please check your internet connection and apt configuration."
+        fi
+    else
+        print_info "All system dependencies are already satisfied."
+    fi
+}
+
+create_directories() {
+    print_step "Creating installation directories"
+    mkdir -p "$APP_CONTENT_DIR"
+    mkdir -p "$VENV_DIR"
+    mkdir -p "$LAUNCHER_DIR"
+    print_info "Created directory: $INSTALL_DIR"
+    print_info "Created directory for app content: $APP_CONTENT_DIR"
+    print_info "Created directory for venv: $VENV_DIR"
+    print_info "Created directory for launcher: $LAUNCHER_DIR"
+}
+
+copy_application_files() {
+    print_step "Copying application files to $APP_CONTENT_DIR"
+
+    # Ensure the target application content directory exists
+    mkdir -p "$APP_CONTENT_DIR"
+
+    # List of items to copy from SCRIPT_DIR
+    # This assumes the script is in the root of the GUI application source folder
+    ITEMS_TO_COPY=(
+        "core"
+        "gui"
+        "shared"
+        "main.py"
+        "requirements.txt"
+        "LICENSE" # Typically good to include
+        "README.md" # For reference
+    )
+
+    # Optional: copy settings.json if it exists in the source, as a default
+    if [ -f "$SCRIPT_DIR/settings.json" ]; then
+        ITEMS_TO_COPY+=("settings.json")
+        print_info "Including 'settings.json' from source."
+    else
+        print_info "No 'settings.json' found in source, skipping."
+    fi
+
+    # Optional: copy project_map.md if it exists in the source
+    if [ -f "$SCRIPT_DIR/project_map.md" ]; then
+        ITEMS_TO_COPY+=("project_map.md")
+        print_info "Including 'project_map.md' from source."
+    else
+        print_info "No 'project_map.md' found in source, skipping."
+    fi
+
+    for item in "${ITEMS_TO_COPY[@]}"; do
+        src_path="$SCRIPT_DIR/$item"
+        if [ -e "$src_path" ]; then # Check if file or directory exists
+            print_info "Copying $item..."
+            if ! cp -r "$src_path" "$APP_CONTENT_DIR/"; then
+                print_error "Failed to copy $item. Aborting."
+            fi
+        else
+            print_warning "Source item $src_path not found. Skipping."
+        fi
+    done
+
+    print_info "Application files copied successfully."
+}
+
+setup_virtual_environment() {
+    print_step "Setting up Python virtual environment in $VENV_DIR"
+
+    if ! python3 -m venv "$VENV_DIR"; then
+        print_error "Failed to create virtual environment at $VENV_DIR. Aborting."
+    fi
+    print_info "Virtual environment created."
+
+    print_info "Upgrading pip..."
+    if ! "$VENV_DIR/bin/pip" install --upgrade pip; then
+        print_error "Failed to upgrade pip in virtual environment. Aborting."
+    fi
+
+    REQUIREMENTS_FILE="$APP_CONTENT_DIR/requirements.txt"
+    if [ -f "$REQUIREMENTS_FILE" ]; then
+        print_info "Installing Python dependencies from $REQUIREMENTS_FILE..."
+        if ! "$VENV_DIR/bin/pip" install -r "$REQUIREMENTS_FILE"; then
+            print_error "Failed to install Python dependencies from $REQUIREMENTS_FILE. Aborting."
+        fi
+        print_info "Python dependencies installed successfully."
+    else
+        print_warning "requirements.txt not found at $REQUIREMENTS_FILE. Skipping dependency installation."
+    fi
+}
+
+create_launcher_script() {
+    print_step "Creating launcher script at $LAUNCHER_DIR/$LAUNCHER_NAME"
+
+    # Using escaped variables for items that should be expanded when the launcher runs,
+    # not when this installer script runs.
+    # INSTALL_DIR and VENV_DIR are expanded now to bake their values into the launcher.
+    cat > "$LAUNCHER_DIR/$LAUNCHER_NAME" << EOF
+#!/bin/bash
+
+# Launcher for $APP_NAME
+# Installation directory: $INSTALL_DIR
+# App content directory: $APP_CONTENT_DIR
+# Venv directory: $VENV_DIR
+
+# Navigate to the application's content directory
+cd "$APP_CONTENT_DIR" || {
+    echo "Error: Could not navigate to $APP_CONTENT_DIR" >&2
+    exit 1
+}
+
+# Run the main Python script using the virtual environment's Python
+"$VENV_DIR/bin/python" main.py "\$@"
+
+# Exit with the status of the Python script
+exit \$?
+EOF
+
+    if ! chmod +x "$LAUNCHER_DIR/$LAUNCHER_NAME"; then
+        print_error "Failed to make launcher script executable at $LAUNCHER_DIR/$LAUNCHER_NAME. Aborting."
+    fi
+
+    print_info "Launcher script created successfully."
+}
+
+show_completion_message() {
+    print_info "--------------------------------------------------"
+    print_info "$APP_NAME installation complete!"
+    print_info "--------------------------------------------------"
+    echo -e "You can now run the application by typing: ${GREEN}$LAUNCHER_NAME${NC}"
+    if [[ ":$PATH:" != *":$LAUNCHER_DIR:"* ]]; then
+        print_warning "Your PATH does not seem to include $LAUNCHER_DIR."
+        print_warning "Please add it to your PATH or run with the full path:"
+        echo -e "  ${GREEN}$LAUNCHER_DIR/$LAUNCHER_NAME${NC}"
+        print_warning "You might need to restart your terminal session for PATH changes to take effect."
+    fi
+    echo ""
+}
+
+# --- Main Execution ---
+main() {
+    print_header
+    check_command "python3"
+    check_command "pip3"
+
+    install_system_dependencies # Will require sudo
+    create_directories
+    copy_application_files
+    setup_virtual_environment
+    create_launcher_script
+
+    show_completion_message
+}
+
+# Run main
+main "$@"
+
+print_info "FFmpeg Easy GUI installation script finished."
