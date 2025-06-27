@@ -1,0 +1,6 @@
+tkinter-tooltip>=2.0.0
+websockets>=10.0
+Pillow>=9.0.0
+numpy>=1.21.0
+psutil>=5.8.0
+watchdog>=2.1.0

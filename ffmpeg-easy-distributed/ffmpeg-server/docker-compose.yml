@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  server1:
+    build: .
+    ports:
+      - "8765:8765"
+    environment:
+      - SERVER_NAME=Server-1
+    
+  server2:
+    build: .
+    ports:
+      - "8766:8765"
+    environment:
+      - SERVER_NAME=Server-2
+    
+  server3:
+    build: .
+    ports:
+      - "8767:8765"
+    environment:
+      - SERVER_NAME=Server-3

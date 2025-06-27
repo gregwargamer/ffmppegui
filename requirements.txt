@@ -1,8 +1,0 @@
-# Core dependencies for the FFmpeg frontend
-# Tkinter is included with Python standard library (on macOS/Homebrew Python)
-psutil>=5.9.0
-ffmpeg-python==0.2.0
-tkinterdnd2==0.3.0
-Pillow
-watchdog
-yt-dlp 
