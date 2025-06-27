@@ -630,15 +630,18 @@ class MainWindow:
         media_type = self.global_type_var.get()
         self._update_codec_choices()
         self._update_media_type_ui(media_type)
+        self._update_quality_controls_for_global() # Update quality section based on new media type
     
     def _on_codec_change(self, event=None):
         """Appelé quand le codec change pour mettre à jour les encodeurs disponibles."""
         self._update_encoder_choices()
         self._update_container_choices()
+        self._update_quality_controls_for_global() # Update quality section based on new codec
     
     def _on_encoder_change(self, event=None):
         """Appelé quand l'encodeur change pour mettre à jour les presets."""
-        self._update_quality_preset_controls()
+        self._update_quality_preset_controls() # This updates encoder preset combobox
+        self._update_quality_controls_for_global() # This updates CQ/Bitrate labels and defaults
     
     def _on_tonemap_change(self):
         """Active ou désactive la méthode de tone mapping."""
@@ -1231,11 +1234,12 @@ class MainWindow:
             codec_choices = [
                 ("WebP", "webp"),
                 ("PNG", "png"),
-                ("JPEG", "mjpeg"),
-                ("AVIF (AV1)", "libaom-av1"),
+                ("JPEG", "mjpeg"), # mjpeg is often used as the codec name for JPEG images in FFmpeg
+                ("AVIF", "libaom-av1"), # Encoder for AV1, used in AVIF
+                ("HEIC/HEIF", "heif"), # Using 'heif' as a general codec identifier for HEIC files
                 ("BMP", "bmp"),
                 ("TIFF", "tiff"),
-                ("JPEG XL", "jpegxl")
+                ("JPEG XL", "jpegxl") # Can also be jxl
             ]
         
         # Ajouter l'option personnalisée
@@ -1316,10 +1320,12 @@ class MainWindow:
             container_choices = [
                 ("WebP", "webp"),
                 ("PNG", "png"),
-                ("JPEG", "jpg"),
+                ("JPEG", "jpg"), # Common extension for mjpeg codec
                 ("BMP", "bmp"),
                 ("TIFF", "tiff"),
-                ("AVIF", "avif")
+                ("AVIF", "avif"),
+                ("HEIC", "heic"), # HEIF images
+                ("JXL", "jxl")    # JPEG XL
             ]
         
         # Mettre à jour le combobox
@@ -1533,13 +1539,16 @@ class MainWindow:
             
             # Codecs image
             'webp': ['libwebp'],
-            'mjpeg': ['mjpeg'],
+            'mjpeg': ['mjpeg'], # JPEG images
             'png': ['png'],
             'bmp': ['bmp'],
             'tiff': ['tiff'],
-            'libaom-av1': ['libaom-av1'],  # Pour AVIF
-            'jpegxl': ['libjxl'],
+            'libaom-av1': ['libaom-av1'],  # AVIF encoder
+            'jpegxl': ['libjxl'],         # JPEG XL encoder
+            'heif': ['libheif', 'hevc_videotoolbox', 'hevc_nvenc', 'hevc_qsv', 'libx265'], # HEIC/HEIF encoders
         }
+        # For HEIF, libheif is ideal. If not available, HEVC encoders can be used.
+        # The order implies preference.
         
         return codec_encoder_map.get(codec.lower(), [])
 
@@ -1598,32 +1607,44 @@ class MainWindow:
             # Afficher toutes les sections pour vidéo
             self._show_frame(self.transform_frame)
             self._show_frame(self.quality_frame)
-            self._show_frame(self.hdr_frame)
-            self._show_frame(self.lut_frame)  # Afficher LUT et watermark pour vidéos
-            
-            # Configurer les presets vidéo
-            self._update_quality_presets_for_video()
+            self._show_frame(self.hdr_frame) # HDR settings
+            self._show_frame(self.subtitle_frame) # Subtitle settings
+            self._show_frame(self.lut_frame)  # LUT and watermark settings
+
+            # Ensure all quality controls are potentially visible for video
+            self.video_mode_radio_quality.grid()
+            self.cq_entry.grid()
+            self.video_mode_radio_bitrate.grid()
+            self.bitrate_entry.grid()
+            self.multipass_check.grid()
+            self.preset_label.grid()
+            self.quality_entry.grid() # This is the encoder preset combobox
             
         elif media_type == "audio":
-            # Cacher résolution/rognage, HDR, LUT et watermark pour audio
-            self._hide_frame(self.transform_frame)
-            self._hide_frame(self.hdr_frame)
-            self._hide_frame(self.lut_frame)  # Cacher LUT et watermark pour audio
-            self._show_frame(self.quality_frame)
+            # Hide video/image specific frames
+            self._hide_frame(self.transform_frame) # Resolution/Crop
+            self._hide_frame(self.hdr_frame)       # HDR
+            self._hide_frame(self.subtitle_frame)  # Subtitles
+            self._hide_frame(self.lut_frame)       # LUT/Watermark
+
+            self._show_frame(self.quality_frame) # Show quality frame, but it will be adapted
             
-            # Configurer les presets audio
-            self._update_quality_presets_for_audio()
+            # Specific audio quality layout handled by _update_quality_controls_for_global
+            # and _on_video_mode_change. No need to hide individual elements here,
+            # as those functions will reconfigure the quality_frame.
             
         elif media_type == "image":
-            # Afficher résolution mais pas HDR, LUT et watermark pour image
-            self._show_frame(self.transform_frame)
-            self._show_frame(self.quality_frame)
-            self._hide_frame(self.hdr_frame)
-            self._hide_frame(self.lut_frame)  # Cacher LUT et watermark pour images
+            # Show transform, hide others
+            self._show_frame(self.transform_frame) # Resolution/Crop for images
+            self._hide_frame(self.hdr_frame)       # No HDR UI for images here
+            self._hide_frame(self.subtitle_frame)  # No subtitles for images
+            self._hide_frame(self.lut_frame)       # No LUT/Watermark UI for images here
+
+            self._show_frame(self.quality_frame) # Show quality frame, adapted for images
             
-            # Configurer les presets image
-            self._update_quality_presets_for_image()
-    
+            # Specific image quality layout handled by _update_quality_controls_for_global
+            # and _on_video_mode_change.
+
     def _show_frame(self, frame):
         """Affiche un frame s'il existe."""
         if frame and hasattr(frame, 'pack'):
@@ -1997,10 +2018,10 @@ class MainWindow:
 
         if filter_complex_segments:
             cmd.extend(["-filter_complex", ";".join(filter_complex_segments)])
-            if current_video_label_for_filters and current_video_label_for_filters != "[0:v]" and not watermark_input_label_for_filter and output_cfg.mode != "gif":
-                 # If main filters created a label, and no overlay happened to consume it for final output
-                 cmd.extend(["-map", current_video_label_for_filters])
-
+            # When filter_complex is used, FFmpeg typically auto-selects the output of the graph
+            # for the video stream. Explicit mapping can sometimes conflict or be redundant
+            # if not carefully managed with final output labels from the graph.
+            # We will rely on auto-selection for video from filter_complex.
 
         # --- Audio Handling ---
         audio_cfg = output_cfg.audio_config
@@ -3816,12 +3837,15 @@ class MainWindow:
         elif "mp3" in codec_str or "lame" in codec_str: codec_str = "mp3"
         elif "opus" in codec_str: codec_str = "opus"
         elif "webp" in codec_str: codec_str = "webp"
+        elif "avif" in codec_str or "libaom-av1" in codec_str : codec_str = "avif"
+        elif "jpegxl" in codec_str or "jxl" in codec_str : codec_str = "jxl"
+        elif "heif" in codec_str or ("hevc" in codec_str and output_cfg.mode == "image"): codec_str = "heic"
         # Add more simplifications as needed
 
         from datetime import datetime
         date_str = datetime.now().strftime("%Y%m%d")
 
-        container_ext_str = output_cfg.container
+        container_ext_str = output_cfg.container # This should be the actual extension e.g. "mp4", "avif", "heic"
 
         # Perform replacements
         filename = template_str.replace("{nom_source}", nom_source)
@@ -3876,4 +3900,110 @@ class MainWindow:
             if hasattr(self, 'bitrate_entry'):
                 self.bitrate_entry.config(state="normal")
             if hasattr(self, 'multipass_check'):
-                self.multipass_check.config(state="normal")
+                self.multipass_check.config(state="normal" if self._encoder_supports_multipass() else "disabled")
+
+    def _encoder_supports_multipass(self) -> bool:
+        """Checks if the currently selected global encoder typically supports multipass."""
+        encoder_display = self.global_encoder_var.get()
+        encoder = self._get_encoder_name_from_display(encoder_display).lower()
+        # Common encoders that support multipass. This can be expanded.
+        if "x264" in encoder or "x265" in encoder or "libvpx" in encoder: # vp8/vp9
+            return True
+        return False
+
+    def _update_quality_controls_for_global(self):
+        """Updates global quality control labels and defaults based on current selections."""
+        media_type = self.global_type_var.get()
+        codec_display = self.global_codec_var.get()
+        codec = self._get_codec_from_display(codec_display).lower()
+        encoder_display = self.global_encoder_var.get()
+        encoder = self._get_encoder_name_from_display(encoder_display).lower()
+
+        # Default texts and values
+        cq_label_text = "Qualité Constante (CQ):"
+        bitrate_label_text = "Bitrate (kbps):"
+        default_cq_val = "22"
+        default_bitrate_val = "4000" # for video
+
+        video_mode_is_cq = True # Default to CQ mode for video unless specified
+
+        if media_type == "video":
+            if "x264" in encoder or "x265" in encoder or "libvpx" in encoder or "svtav1" in encoder or "aom" in encoder:
+                cq_label_text = "CRF Value:"
+                default_cq_val = "23"
+            elif "qsv" in encoder or "nvenc" in encoder or "amf" in encoder or "videotoolbox" in encoder:
+                cq_label_text = "CQ/CRF (e.g. 23):"
+                default_cq_val = "23"
+                # These often also support bitrate well, so don't force CQ mode
+            else: # Other video (e.g. mpeg4, prores often bitrate or quality level)
+                cq_label_text = "Qualité (si applicable):"
+                bitrate_label_text = "Bitrate (e.g. 4000k):"
+                default_bitrate_val = "4000"
+                video_mode_is_cq = False # Default to bitrate for these
+
+            # Update radio button texts
+            self.video_mode_radio_quality.config(text=cq_label_text)
+            self.video_mode_radio_bitrate.config(text=bitrate_label_text)
+
+            # Set default values if current ones are empty or placeholders
+            if not self.quality_var.get() or self.quality_var.get() == Settings.data.get("default_cq", "22"):
+                self.quality_var.set(default_cq_val)
+                self.cq_var.set(default_cq_val) # Ensure cq_var (if used separately) is also updated
+
+            if not self.bitrate_var.get() or self.bitrate_var.get() == Settings.data.get("default_bitrate", "4000"):
+                self.bitrate_var.set(default_bitrate_val)
+
+            # Set the video mode (CQ vs Bitrate)
+            if video_mode_is_cq:
+                if self.video_mode_var.get() != "quality": # Only change if not already quality
+                    self.video_mode_var.set("quality")
+            else:
+                if self.video_mode_var.get() != "bitrate": # Only change if not already bitrate
+                    self.video_mode_var.set("bitrate")
+            self._on_video_mode_change() # Refresh UI state of entries
+
+        elif media_type == "audio":
+            # For audio, usually bitrate based, or a specific level (FLAC)
+            # The quality_frame's video_mode_radios are less relevant here.
+            # We re-purpose cq_entry for FLAC level, and bitrate_entry for bitrates.
+            self.video_mode_radio_quality.config(text="Niveau FLAC (0-11):") # If FLAC
+            self.video_mode_radio_bitrate.config(text="Bitrate Audio (kbps):") # For others
+
+            if "flac" in encoder:
+                self.video_mode_var.set("quality") # Use the "quality" radio for FLAC level
+                if not self.quality_var.get() or not self.quality_var.get().isdigit():
+                    self.quality_var.set("5") # Default FLAC level
+            else: # AAC, MP3, Opus etc.
+                self.video_mode_var.set("bitrate") # Use "bitrate" radio
+                if not self.bitrate_var.get() or not self.bitrate_var.get().endswith('k'):
+                    self.bitrate_var.set("128") # Default audio bitrate (will be suffixed with 'k' by save)
+            self._on_video_mode_change() # Refresh UI
+
+        elif media_type == "image":
+            # For images, usually a quality percentage or specific compression level (PNG)
+            self.video_mode_radio_quality.config(text="Qualité Image (% ou Niveau):")
+            self.video_mode_radio_bitrate.grid_remove() # Hide bitrate radio for images
+            self.bitrate_entry.grid_remove()
+            self.multipass_check.grid_remove()
+
+            # Ensure quality radio is visible and selected
+            self.video_mode_radio_quality.grid()
+            self.cq_entry.grid() # Re-purposing cq_entry for image quality
+            self.video_mode_var.set("quality")
+
+
+            if "png" in encoder:
+                if not self.quality_var.get() or not self.quality_var.get().isdigit():
+                    self.quality_var.set("6") # Default PNG compression
+            else: # webp, jpeg, avif, jxl etc.
+                if not self.quality_var.get() or not self.quality_var.get().isdigit():
+                    self.quality_var.set("90") # Default image quality %
+            self._on_video_mode_change() # Refresh UI (ensure only CQ entry is active)
+
+        # Ensure multipass is disabled if encoder doesn't support it
+        if hasattr(self, 'multipass_check'):
+            self.multipass_check.config(state="normal" if self._encoder_supports_multipass() and self.video_mode_var.get() == "bitrate" else "disabled")
+
+    def _on_media_type_change(self, event=None):
+        """Met à jour les choix de l'UI quand le type de média change."""
+        media_type = self.global_type_var.get()

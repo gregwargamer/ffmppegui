@@ -18,23 +18,32 @@ This directory contains the backend logic of the application.
 
 - **`core/settings.py`**: Manages the application's settings. It defines the default settings, loads settings from a JSON file, and saves settings to a JSON file.
 
-- **`core/encode_job.py`**: Defines the `EncodeJob` class, which represents a single encoding task. It stores information about the source and destination paths, encoding parameters, and the status of the job. Its `audio_config` dictionary has been updated to store a detailed list of configurations for each individual audio track.
+- **`core/encode_job.py`**: Defines the `EncodeJob` class, representing a single source file to be processed. Crucially, an `EncodeJob` now contains a list of `OutputConfig` objects. Each `OutputConfig` defines a specific output to be generated from the source, including its own encoder, quality settings (CRF, bitrate, image quality), presets, custom flags, container type, and filter configurations (like scaling, LUTs, watermarks). This allows for generating multiple different outputs (e.g., 1080p H.264, 720p AV1, audio-only AAC) from a single source job. The overall status and progress of an `EncodeJob` are aggregated from its `OutputConfig` instances.
 
-- **`core/ffmpeg_helpers.py`**: Provides helper functions for interacting with FFmpeg. It includes functions to get available encoders and codecs, including detection of hardware-accelerated encoders.
+- **`core/ffmpeg_helpers.py`**: Provides helper functions for interacting with FFmpeg. It includes functions to get available encoders and codecs, including detection of hardware-accelerated encoders. It has been updated to better recognize and categorize newer image formats like HEIC, AVIF, and JPEG XL.
 
-- **`core/worker_pool.py`**: Implements a worker pool for running encoding jobs in parallel. It uses a queue to manage jobs and a thread pool to execute them.
+- **`core/worker_pool.py`**: Implements a worker pool for running encoding tasks in parallel. Each task in the pool now corresponds to processing a single `OutputConfig` from an `EncodeJob`.
 
 ### `gui` Directory
 
 This directory contains the user interface components of the application.
 
-- **`gui/main_window.py`**: The main window of the application. It contains the file selection, encoding settings, and job queue sections. It also handles user interactions and manages the worker pool. It now features a dedicated `_build_ffmpeg_command` method that centralizes the logic for constructing the final FFmpeg command string, taking into account detailed video, audio, and filter settings. It also includes a `_build_filter_string` method to generate filter strings for previews and final renders, a "Generate Preview" button to create a short preview clip, and the UI has been updated to include a "gif" media type and a dedicated GIF options frame.
+- **`gui/main_window.py`**: The main window of the application. It contains the file selection, global encoding settings panel, and job queue. It handles user interactions, manages the worker pool, and its `_build_ffmpeg_command_for_output_config` method constructs FFmpeg commands for each `OutputConfig`. The global encoding settings panel has been refined:
+    - Quality control labels and default values now adapt dynamically based on the selected global media type, codec, and encoder (e.g., showing "CRF Value" for x264, "FLAC Level" for FLAC, "Quality %" for JPEG).
+    - UI sections for HDR, LUTs, and Subtitles are conditionally hidden if the selected global media type is audio or image.
+    - The UI now supports selecting newer image formats like HEIC, AVIF, and JPEG XL in the global settings.
+    It also includes a `_build_filter_string` method (likely for previews, though its direct usage might have evolved), a "Generate Preview" button, and UI for "gif" media type.
 
 - **`gui/settings_window.py`**: The settings window, which allows users to configure the application's preferences.
 
-- **`gui/job_edit_window.py`**: The job edit window, which allows users to edit the encoding parameters of a single job.
+- **`gui/job_edit_window.py`**: This window has been significantly overhauled. It no longer edits parameters for a single job monolithically. Instead, it allows users to manage and edit multiple `OutputConfig` instances for a given `EncodeJob` (source file). Key features:
+    - Displays a list of `OutputConfig`s for the job.
+    - Allows adding, removing, and duplicating `OutputConfig`s.
+    - When an `OutputConfig` is selected, its specific settings (name, mode, encoder, quality, preset, container, custom flags) are loaded into dedicated tabs (Video, Audio, Image).
+    - The quality input fields and labels within these tabs adapt dynamically based on the selected encoder and mode for that specific `OutputConfig` (similar to the main window's global panel).
+    - Saves changes back to the specific `OutputConfig` object within the `EncodeJob`.
 
-- **`gui/log_viewer_window.py`**: The log viewer window, which displays the FFmpeg logs for each job.
+- **`gui/log_viewer_window.py`**: The log viewer window, which displays the FFmpeg logs for each job (likely per `OutputConfig` task).
 
 - **`gui/folder_watcher.py`**: Implements a folder watcher that automatically adds new files to the encoding queue.
 
