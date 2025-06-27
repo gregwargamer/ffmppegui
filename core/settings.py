@@ -45,7 +45,8 @@ DEFAULT_SETTINGS = {
             "container": "webp",
             "custom_flags": ""
         }
-    }
+    },
+    "filename_template": "{nom_source}-{resolution}.{container_ext}" # Default template
 }
 
 
