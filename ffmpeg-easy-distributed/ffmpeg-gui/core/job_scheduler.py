@@ -1,11 +1,13 @@
 import asyncio
 import logging
+import time
 from typing import List, Dict, Optional, Any, Callable
 import uuid
 
 from shared.messages import JobConfiguration, JobProgress, JobResult, ServerInfo, JobStatus
 from core.distributed_client import DistributedClient
 from core.capability_matcher import CapabilityMatcher
+from core.local_server import LocalServer
 
 class JobScheduler:
     """Planifie et distribue les jobs d'encodage aux serveurs disponibles."""
@@ -13,6 +15,7 @@ class JobScheduler:
     def __init__(self, distributed_client: DistributedClient, capability_matcher: CapabilityMatcher):
         self.distributed_client = distributed_client
         self.capability_matcher = capability_matcher
+        self.local_server = LocalServer()  # Serveur local intégré
         self.job_queue: asyncio.Queue[JobConfiguration] = asyncio.Queue()
         self.active_jobs: Dict[str, JobConfiguration] = {}
         self.job_status_callbacks: Dict[str, Callable[[JobProgress], Any]] = {}
@@ -39,6 +42,9 @@ class JobScheduler:
                 await self._scheduler_task
             except asyncio.CancelledError:
                 self.logger.info("Planificateur de jobs arrêté.")
+        
+        # Nettoyer le serveur local
+        self.local_server.cleanup()
 
     async def add_job(self, job_config: JobConfiguration,
                       progress_callback: Callable[[JobProgress], Any],
@@ -58,40 +64,70 @@ class JobScheduler:
                 job = await self.job_queue.get()
                 self.logger.info(f"Tentative de planification du job: {job.job_id}")
                 
-                # Trouver le meilleur serveur
-                best_servers = self.capability_matcher.find_best_servers(
-                    job, self.distributed_client.get_connected_servers()
-                )
+                # Trouver le meilleur serveur distant
+                connected_servers = self.distributed_client.get_connected_servers()
+                best_servers = self.capability_matcher.find_best_servers(job, connected_servers) if connected_servers else []
 
-                if not best_servers:
-                    self.logger.warning(f"Aucun serveur compatible trouvé pour le job {job.job_id}. Remise en file d'attente.")
-                    await self.job_queue.put(job) # Remettre en file d'attente
-                    await asyncio.sleep(5) # Attendre avant de réessayer
-                    continue
+                if best_servers and connected_servers:
+                    # Utiliser un serveur distant
+                    selected_server_match = best_servers[0]
+                    selected_server_id = selected_server_match.server_id
+                    self.logger.info(f"Job {job.job_id} assigné au serveur distant {selected_server_id}")
+                    
+                    success = await self.distributed_client.send_job_to_server(
+                        selected_server_id, job,
+                        self._get_job_progress_callback(job.job_id),
+                        self._get_job_completion_callback(job.job_id)
+                    )
 
-                # Pour l'instant, prendre le premier serveur recommandé
-                selected_server_match = best_servers[0]
-                selected_server_id = selected_server_match.server_id
-
-                self.logger.info(f"Job {job.job_id} assigné au serveur {selected_server_id}")
-                
-                # Envoyer le job au serveur
-                success = await self.distributed_client.send_job_to_server(
-                    selected_server_id, job,
-                    self._get_job_progress_callback(job.job_id),
-                    self._get_job_completion_callback(job.job_id)
-                )
-
-                if not success:
-                    self.logger.error(f"Échec de l'envoi du job {job.job_id} au serveur {selected_server_id}. Remise en file d'attente.")
-                    await self.job_queue.put(job) # Remettre en file d'attente
-                    await asyncio.sleep(5) # Attendre avant de réessayer
+                    if not success:
+                        self.logger.warning(f"Échec de l'envoi au serveur distant {selected_server_id}. Fallback vers serveur local.")
+                        # Fallback vers le serveur local
+                        await self._process_job_locally(job)
+                else:
+                    # Aucun serveur distant disponible, utiliser le serveur local
+                    self.logger.info(f"Aucun serveur distant disponible. Job {job.job_id} traité localement.")
+                    await self._process_job_locally(job)
 
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 self.logger.error(f"Erreur dans la boucle de planification: {e}")
                 await asyncio.sleep(5) # Attendre avant de réessayer
+
+    async def _process_job_locally(self, job: JobConfiguration):
+        """Traite un job localement avec le serveur intégré"""
+        try:
+            if not self.local_server.is_available():
+                self.logger.warning(f"Serveur local occupé. Job {job.job_id} remis en file d'attente.")
+                await self.job_queue.put(job)
+                await asyncio.sleep(2)
+                return
+
+            success = await self.local_server.process_job(
+                job,
+                self._get_job_progress_callback(job.job_id),
+                self._get_job_completion_callback(job.job_id)
+            )
+            
+            if not success:
+                self.logger.error(f"Échec du traitement local du job {job.job_id}")
+        except Exception as e:
+            self.logger.error(f"Erreur traitement local job {job.job_id}: {e}")
+            # Créer un résultat d'erreur
+            error_result = JobResult(
+                job_id=job.job_id,
+                status=JobStatus.FAILED,
+                output_file="",
+                file_size=0,
+                duration=0.0,
+                average_fps=0.0,
+                error_message=str(e),
+                server_id=self.local_server.server_id,
+                completed_at=time.time()
+            )
+            completion_callback = self._get_job_completion_callback(job.job_id)
+            await completion_callback(error_result)
 
     def _get_job_progress_callback(self, job_id: str) -> Callable[[JobProgress], Any]:
         """Retourne un callback de progression spécifique au job."""
@@ -148,4 +184,8 @@ class JobScheduler:
     def register_all_jobs_finished_callback(self, callback: Callable[[], Any]):
         """Enregistre un callback appelé quand tous les jobs sont terminés."""
         self.all_jobs_finished_callback = callback
+
+    def get_local_server_info(self) -> ServerInfo:
+        """Retourne les informations du serveur local pour l'interface"""
+        return self.local_server.get_server_info()
 

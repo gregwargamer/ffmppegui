@@ -717,12 +717,21 @@ class MainWindow:
         self.servers_label.pack(side=tk.RIGHT, padx=5)
 
     def update_server_status(self, connected_servers: List[ServerInfo]):
+        # Ajouter le serveur local à la liste
+        all_servers = connected_servers.copy()
+        local_server = self.job_scheduler.get_local_server_info()
+        all_servers.append(local_server)
+        
         connected_count = len(connected_servers)
-        total_jobs = sum(s.current_jobs for s in connected_servers)
-        if connected_count == 0:
-            self.servers_var.set("🔴 Aucun serveur")
+        total_servers = len(all_servers)
+        total_jobs = sum(s.current_jobs for s in all_servers)
+        
+        if total_servers == 1:  # Seulement le serveur local
+            self.servers_var.set("🟡 Serveur local uniquement")
+        elif connected_count == 0:
+            self.servers_var.set("🟡 Serveur local uniquement") 
         else:
-            self.servers_var.set(f"🟢 {connected_count} serveur(s) - {total_jobs} jobs en cours")
+            self.servers_var.set(f"🟢 {connected_count} serveur(s) distant(s) + local - {total_jobs} jobs en cours")
 
     def open_server_manager(self):
         ServerManagerWindow(self.root, self.server_discovery)
