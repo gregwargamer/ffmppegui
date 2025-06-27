@@ -223,64 +223,80 @@ class WorkerPool:
         """Boucle principale du worker thread"""
         while self.running:
             try:
-                job = self.job_queue.get(timeout=1.0)
-                if job is None:  # Sentinelle pour arrêter
+                item = self.job_queue.get(timeout=1.0) # item is now ((parent_job, output_cfg), command_builder)
+                if item is None:  # Sentinelle pour arrêter
                     break
-                self._run_job(job)
+
+                (parent_job, output_cfg_for_task), command_builder = item
+                self._run_job(parent_job, output_cfg_for_task, command_builder)
                 self.job_queue.task_done()
             except queue.Empty:
                 continue
 
-    def _run_job(self, job: EncodeJob):
+    def _run_job(self, parent_job: EncodeJob, output_cfg: OutputConfig, command_builder=None):
         try:
-            # Vérifier si le job a été annulé avant de commencer
-            if job.is_cancelled:
+            # Vérifier si le job parent a été annulé avant de commencer
+            if parent_job.is_cancelled: # Check parent job's cancellation flag
+                output_cfg.status = "cancelled" # Mark this specific output as cancelled too
+                if self.progress_callback: self.progress_callback(parent_job, output_cfg)
                 return
-                
-            # Log du début du job
-            if self.log_callback:
-                self.log_callback(job, f"Starting encoding: {job.src_path.name} -> {job.dst_path.name}", "info")
-                
-            # Obtenir la durée du fichier pour le calcul du progrès
-            try:
-                rr = subprocess.run(["ffprobe", "-v", "quiet", "-show_entries", "format=duration", "-of", "csv=p=0", str(job.src_path)], 
-                                   capture_output=True, text=True, timeout=30)
-                if rr.returncode == 0 and rr.stdout.strip():
-                    duration_str = rr.stdout.strip()
-                    if duration_str != "N/A":
-                        job.duration = float(duration_str)
-                        if self.log_callback:
-                            self.log_callback(job, f"Duration detected: {job.duration:.2f}s", "info")
-            except (subprocess.TimeoutExpired, ValueError) as e:
-                if self.log_callback:
-                    self.log_callback(job, f"Could not detect duration: {e}", "warning")
 
-            # Construire la commande FFmpeg
-            stream = build_ffmpeg_stream(job)
-            args = ffmpeg.compile(stream, overwrite_output=True) + ["-progress", "-", "-nostats"]
+            # Log du début du job (specific to this output_cfg)
+            log_context_job = parent_job # For overall job context in logs
+            if self.log_callback:
+                self.log_callback(log_context_job, f"Starting output '{output_cfg.name}': {parent_job.src_path.name} -> {output_cfg.dst_path.name}", "info", output_cfg.id)
+
+            # Fetch duration from parent_job if not already fetched
+            if parent_job.duration is None:
+                try:
+                    rr = subprocess.run(["ffprobe", "-v", "quiet", "-show_entries", "format=duration", "-of", "csv=p=0", str(parent_job.src_path)],
+                                       capture_output=True, text=True, timeout=30)
+                    if rr.returncode == 0 and rr.stdout.strip():
+                        duration_str = rr.stdout.strip()
+                        if duration_str != "N/A":
+                            parent_job.duration = float(duration_str)
+                            if self.log_callback:
+                                self.log_callback(log_context_job, f"Source duration detected: {parent_job.duration:.2f}s", "info", output_cfg.id)
+                except (subprocess.TimeoutExpired, ValueError) as e:
+                    if self.log_callback:
+                        self.log_callback(log_context_job, f"Could not detect source duration: {e}", "warning", output_cfg.id)
+
+            # Construire la commande FFmpeg using the command_builder, passing parent_job and output_cfg
+            if command_builder:
+                args = command_builder(parent_job, output_cfg) + ["-progress", "-", "-nostats"]
+            else:
+                # Fallback or error if no command_builder, as build_ffmpeg_stream is not adapted for OutputConfig directly
+                # For now, assume command_builder is always provided from MainWindow
+                if self.log_callback:
+                    self.log_callback(log_context_job, "Error: No command_builder provided for job.", "error", output_cfg.id)
+                output_cfg.status = "error"
+                if self.progress_callback: self.progress_callback(parent_job, output_cfg)
+                return
             
             if self.log_callback:
-                self.log_callback(job, f"FFmpeg command: {' '.join(args)}", "info")
+                self.log_callback(log_context_job, f"FFmpeg command for '{output_cfg.name}': {' '.join(args)}", "info", output_cfg.id)
             
-            job.status = "running"
+            output_cfg.status = "running"
             if self.progress_callback:
-                self.progress_callback(job)
+                self.progress_callback(parent_job, output_cfg) # Notify with parent_job and specific output_cfg
             
-            # Lancer le processus FFmpeg
-            job.process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
+            # Lancer le processus FFmpeg, store process on output_cfg
+            output_cfg.process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
             
             # Créer un thread pour lire stderr
-            stderr_thread = threading.Thread(target=self._read_stderr, args=(job,), daemon=True)
+            stderr_thread = threading.Thread(target=self._read_stderr, args=(parent_job, output_cfg,), daemon=True)
             stderr_thread.start()
             
             # Lire les informations de progrès
             while True:
-                # Vérifier si le job a été annulé
-                if job.is_cancelled:
-                    job.cancel()
+                if parent_job.is_cancelled: # Check parent job's cancellation flag
+                    if output_cfg.process and output_cfg.process.poll() is None:
+                        try: output_cfg.process.terminate()
+                        except: pass
+                    output_cfg.status = "cancelled"
                     break
                     
-                line_bytes = job.process.stdout.readline()
+                line_bytes = output_cfg.process.stdout.readline()
                 if not line_bytes:
                     break
                 line = line_bytes.decode('utf-8').strip()
@@ -289,73 +305,64 @@ class WorkerPool:
                         time_str = line.split("=")[1].strip()
                         if time_str != "N/A":
                             ms = int(time_str)
-                            if job.duration:
-                                job.progress = min(ms / 1e6 / job.duration, 1.0)
+                            if parent_job.duration and parent_job.duration > 0: # Use parent_job.duration
+                                output_cfg.progress = min(ms / 1e6 / parent_job.duration, 1.0)
                                 if self.progress_callback:
-                                    self.progress_callback(job)
+                                    self.progress_callback(parent_job, output_cfg)
                     except (ValueError, IndexError):
-                        # Skip invalid progress values
                         pass
                 elif line.startswith("progress=") and line.endswith("end"):
-                    job.progress = 1.0
+                    output_cfg.progress = 1.0
                     if self.progress_callback:
-                        self.progress_callback(job)
+                        self.progress_callback(parent_job, output_cfg)
             
-            # Attendre la fin du processus
-            job.process.wait()
+            output_cfg.process.wait() # Wait for this specific output's process
             
-            # Définir le statut final
-            if job.is_cancelled:
-                job.status = "cancelled"
+            if parent_job.is_cancelled: # Re-check, process might have finished due to cancellation
+                 output_cfg.status = "cancelled"
+            elif output_cfg.process.returncode == 0:
+                output_cfg.status = "done"
+                output_cfg.progress = 1.0
                 if self.log_callback:
-                    self.log_callback(job, "Job cancelled by user", "warning")
-            elif job.process.returncode == 0:
-                job.status = "done"
-                job.progress = 1.0
-                if self.log_callback:
-                    self.log_callback(job, "Encoding completed successfully", "info")
+                    self.log_callback(log_context_job, f"Output '{output_cfg.name}' completed successfully.", "info", output_cfg.id)
             else:
-                job.status = "error"
+                output_cfg.status = "error"
                 if self.log_callback:
-                    self.log_callback(job, f"Encoding failed with return code {job.process.returncode}", "error")
+                    self.log_callback(log_context_job, f"Output '{output_cfg.name}' failed with return code {output_cfg.process.returncode}.", "error", output_cfg.id)
                 
         except Exception as e:
-            if not job.is_cancelled:
-                job.status = "error"
-            error_msg = f"Encoding error: {e}"
-            print(error_msg)
+            if not parent_job.is_cancelled: # Only set to error if not part of a general cancel
+                output_cfg.status = "error"
+            error_msg = f"Encoding error for output '{output_cfg.name}': {e}"
+            print(error_msg) # Keep console print for critical errors
             if self.log_callback:
-                self.log_callback(job, error_msg, "error")
+                self.log_callback(parent_job, error_msg, "error", output_cfg.id) # Log with parent_job context
         finally:
+            output_cfg.process = None # Clear process handle
             if self.progress_callback:
-                self.progress_callback(job)
+                self.progress_callback(parent_job, output_cfg) # Final progress update
     
-    def _read_stderr(self, job: EncodeJob):
-        """Lit la sortie stderr de FFmpeg dans un thread séparé"""
-        if not job.process or not job.process.stderr:
+    def _read_stderr(self, parent_job: EncodeJob, output_cfg: OutputConfig):
+        """Lit la sortie stderr de FFmpeg dans un thread séparé for a specific output_cfg."""
+        if not output_cfg.process or not output_cfg.process.stderr:
             return
             
         try:
             while True:
-                line_bytes = job.process.stderr.readline()
+                line_bytes = output_cfg.process.stderr.readline()
                 if not line_bytes:
                     break
-                    
                 line = line_bytes.decode('utf-8', errors='ignore').strip()
                 if line and self.log_callback:
-                    # Déterminer le type de log basé sur le contenu
                     log_type = "info"
-                    if "error" in line.lower() or "failed" in line.lower():
-                        log_type = "error"
-                    elif "warning" in line.lower():
-                        log_type = "warning"
-                    elif "frame=" in line or "fps=" in line:
-                        log_type = "progress"
+                    if "error" in line.lower() or "failed" in line.lower(): log_type = "error"
+                    elif "warning" in line.lower(): log_type = "warning"
+                    elif "frame=" in line or "fps=" in line: log_type = "progress" # Could be too noisy
                     
-                    self.log_callback(job, line, log_type)
+                    self.log_callback(parent_job, f"[{output_cfg.name}]: {line}", log_type, output_cfg.id)
         except Exception as e:
             if self.log_callback:
-                self.log_callback(job, f"Error reading stderr: {e}", "error")
+                self.log_callback(parent_job, f"Error reading stderr for '{output_cfg.name}': {e}", "error", output_cfg.id)
 
-    def submit(self, job: EncodeJob):
-        self.job_queue.put(job)
+    def submit(self, job_item: tuple, command_builder=None): # job_item is now (parent_job, output_cfg)
+        self.job_queue.put((job_item, command_builder))

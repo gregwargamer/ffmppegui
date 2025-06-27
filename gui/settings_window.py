@@ -52,8 +52,20 @@ class SettingsWindow:
         self.flags_var = StringVar(value=Settings.data.get("custom_flags", ""))
         ttk.Entry(self.top, textvariable=self.flags_var, width=25).grid(row=7, column=1)
 
+        # Filename Template
+        ttk.Label(self.top, text="Output Filename Template").grid(row=8, column=0, sticky="w")
+        self.filename_template_var = StringVar(value=Settings.data.get("filename_template", "{nom_source}-{resolution}.{container_ext}"))
+        ttk.Entry(self.top, textvariable=self.filename_template_var, width=40).grid(row=8, column=1, sticky="ew")
+
+        # Info label for filename template
+        template_info_label = ttk.Label(self.top,
+                                        text="Variables: {nom_source}, {resolution}, {codec}, {date}, {container_ext}",
+                                        font=("Helvetica", 9), foreground="gray")
+        template_info_label.grid(row=9, column=0, columnspan=2, sticky="w", padx=5, pady=(0,5))
+
+
         save_btn = ttk.Button(self.top, text="Save", command=self._save)
-        save_btn.grid(row=8, column=0, columnspan=2, pady=10)
+        save_btn.grid(row=10, column=0, columnspan=2, pady=10)
 
     def _save(self):
         Settings.data["concurrency"] = int(self.cores_var.get())
@@ -64,5 +76,6 @@ class SettingsWindow:
         Settings.data["default_audio_encoder"] = self.def_aud_var.get()
         Settings.data["default_image_encoder"] = self.def_img_var.get()
         Settings.data["custom_flags"] = self.flags_var.get()
+        Settings.data["filename_template"] = self.filename_template_var.get()
         Settings.save()
         self.top.destroy()

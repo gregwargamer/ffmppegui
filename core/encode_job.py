@@ -1,109 +1,164 @@
 import subprocess
 from pathlib import Path
+from typing import List, Dict, Any, Optional
+import uuid # For unique IDs for OutputConfig
 
-class EncodeJob:
-    def __init__(self, src_path: Path, dst_path: Path, mode: str):
-        self.src_path = src_path
-        self.dst_path = dst_path
-        self.mode = mode
+# Using a simple class for OutputConfig for now. Could be a dataclass in Python 3.7+
+class OutputConfig:
+    def __init__(self, name: str, initial_dst_path: Path, mode: str):
+        self.id: str = str(uuid.uuid4()) # Unique ID for this output configuration
+        self.name: str = name # User-friendly name like "1080p H.264" or "AV1 4K"
+        self.dst_path: Path = initial_dst_path # Will be updated by filename template
+        self.mode: str = mode # video, audio, image, gif - usually same as parent EncodeJob but could differ
+
         self.encoder: str = ""
-        self.quality: str = ""
-        self.cq_value: str = ""
-        self.preset: str = ""
+        self.container: str = "" # e.g. "mp4", "mkv" - crucial for filename template and ffmpeg
+        self.quality: str = "" # CRF value for video, quality for image, bitrate for audio (e.g. "192k")
+        self.cq_value: str = "" # Specific CQ value if different from quality (e.g. for QSV)
+        self.preset: str = "" # Encoder preset (e.g. "medium", "slow")
         self.custom_flags: str = ""
+
         self.status: str = "pending"  # pending, running, paused, done, error, cancelled
         self.progress: float = 0.0
-        self.duration: float = None
-        self.process: subprocess.Popen = None
+        self.process: Optional[subprocess.Popen] = None # FFmpeg process for this specific output
         self.is_paused: bool = False
-        self.is_cancelled: bool = False
-        
-        # Nouveaux paramètres d'encodage
+        # is_cancelled is handled by the parent EncodeJob for all its outputs
+
+        # Encoding parameters (mirrors what was in EncodeJob, now per output)
         self.video_mode: str = "quality"  # quality, bitrate
-        self.bitrate: str = ""  # Pour l'encodage basé sur le bitrate
-        self.multipass: bool = False  # Multi-pass encoding
-        self.longest_side: str = ""  # Pour les images
-        self.megapixels: str = ""  # Pour les images
+        self.bitrate: str = ""
+        self.multipass: bool = False
+        self.longest_side: str = ""
+        self.megapixels: str = ""
         
-        # Filtres avancés
-        self.filters = {
-            "brightness": 0,    # -100 à 100
-            "contrast": 0,      # -100 à 100
-            "saturation": 0,    # -100 à 100
-            "gamma": 1.0,       # 0.1 à 3.0
-            "hue": 0,          # -180 à 180
-            "sharpness": 0,     # -10 à 10
-            "noise_reduction": 0, # 0 à 100
-            "scale_width": 0,   # 0 = pas de resize
-            "scale_height": 0,  # 0 = pas de resize
-            "crop_x": 0,
-            "crop_y": 0,
-            "crop_w": 0,
-            "crop_h": 0,
-            "rotate": 0,        # 0, 90, 180, 270
-            "flip_h": False,    # flip horizontal
-            "flip_v": False,    # flip vertical
+        self.filters: Dict[str, Any] = { # Default filters, can be customized per output
+            "brightness": 0, "contrast": 0, "saturation": 0, "gamma": 1.0, "hue": 0,
+            "sharpness": 0, "noise_reduction": 0, "scale_width": 0, "scale_height": 0,
+            "crop_x": 0, "crop_y": 0, "crop_w": 0, "crop_h": 0,
+            "rotate": 0, "flip_h": False, "flip_v": False,
         }
-        
-        # Configuration des pistes audio
-        self.audio_config = {
-            "mode": "auto",  # auto, copy, encode, remove
-            "selected_tracks": [],  # Liste des indices de pistes à garder
-            "audio_codec": "aac",
-            "audio_bitrate": "128k"
+        self.audio_config: Dict[str, Any] = { # Default audio config
+            "mode": "auto", "selected_tracks": [], "audio_codec": "aac", "audio_bitrate": "128k"
         }
-
-        # Configuration des sous-titres
-        self.subtitle_config = {
-            "mode": "copy",  # copy, burn, remove, add
-            "external_path": None, # Chemin vers le fichier de sous-titres externe
-            "burn_track": -1 # Index de la piste à incruster
+        self.subtitle_config: Dict[str, Any] = { # Default subtitle config
+            "mode": "copy", "external_path": None, "burn_track": -1
         }
+        self.trim_config: Dict[str, Any] = {"start": "", "end": ""} # Default trim
+        self.gif_config: Dict[str, Any] = {"fps": 15, "use_palette": True} # Default GIF
+        self.lut_path: Optional[str] = None # Path to the LUT file
 
-        # Configuration du découpage
-        self.trim_config = {
-            "start": "",  # HH:MM:SS ou secondes
-            "end": ""     # HH:MM:SS ou secondes
-        }
+        # Watermark settings
+        self.watermark_path: Optional[str] = None
+        self.watermark_position: str = "top_right" # e.g., top_left, top_right, bottom_left, bottom_right, center
+        self.watermark_scale: float = 0.1 # Relative to video width (e.g., 0.1 = 10% of video width)
+        self.watermark_opacity: float = 1.0 # 0.0 (transparent) to 1.0 (opaque)
+        self.watermark_padding: int = 10 # Pixels
 
-        # Configuration pour la création de GIF
-        self.gif_config = {
-            "fps": 15,
-            "use_palette": True
-        }
 
-    def cancel(self):
-        """Annule le job et termine le processus FFmpeg"""
-        self.is_cancelled = True
-        if self.process and self.process.poll() is None:
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-        self.status = "cancelled"
+class EncodeJob:
+    def __init__(self, src_path: Path, mode: str, initial_output_config: OutputConfig = None):
+        self.src_path: Path = src_path
+        self.mode: str = mode # Primary mode of the source (video, audio, image)
+        self.relative_src_path: Optional[Path] = None # For preserving structure
 
-    def pause(self):
-        """Met en pause le job (suspend le processus)"""
-        if self.process and self.process.poll() is None and not self.is_paused:
-            try:
-                import signal
-                self.process.send_signal(signal.SIGSTOP)
-                self.is_paused = True
-                self.status = "paused"
-            except:
-                pass
+        self.outputs: List[OutputConfig] = []
+        if initial_output_config:
+            self.outputs.append(initial_output_config)
 
-    def resume(self):
-        """Reprend le job en pause"""
-        if self.process and self.process.poll() is None and self.is_paused:
-            try:
-                import signal
-                self.process.send_signal(signal.SIGCONT)
-                self.is_paused = False
-                self.status = "running"
-            except:
-                pass
+        # Overall status and progress for the EncodeJob (aggregated from outputs)
+        # self.status: str = "pending" # This will be derived
+        # self.progress: float = 0.0 # This will be derived
+        self.duration: Optional[float] = None # Duration of the source, fetched once
+
+        self.is_cancelled: bool = False # Cancellation applies to all outputs of this job
+
+    def get_overall_status(self) -> str:
+        if not self.outputs:
+            return "pending" # Or "empty" / "misconfigured"
+        if self.is_cancelled:
+            return "cancelled"
+
+        statuses = [out.status for out in self.outputs]
+        if any(s == "running" for s in statuses): return "running"
+        if any(s == "paused" for s in statuses): return "paused"
+        # If all are done, it's done. If all are pending, it's pending.
+        # If all are error/cancelled/done, and at least one error, it's error.
+        if all(s == "done" for s in statuses): return "done"
+        if all(s == "pending" for s in statuses): return "pending"
+        if all(s in ["done", "error", "cancelled"] for s in statuses):
+            if any(s == "error" for s in statuses): return "error"
+            # If here, all are done or cancelled (no errors, no pending, no running)
+            if any(s == "done" for s in statuses): return "done" # At least one done, others cancelled
+            return "cancelled" # All must be cancelled
+
+        return "mixed" # Some pending, some done, etc. but not running/paused
+
+    def get_overall_progress(self) -> float:
+        if not self.outputs:
+            return 0.0
+        total_progress = sum(out.progress for out in self.outputs)
+        return total_progress / len(self.outputs) if self.outputs else 0.0
+
+    def cancel_all_outputs(self):
+        """Cancels all individual output processes for this job."""
+        self.is_cancelled = True # Mark the main job as cancelled
+        for output_cfg in self.outputs:
+            output_cfg.status = "cancelled" # Mark individual output
+            if output_cfg.process and output_cfg.process.poll() is None:
+                try:
+                    output_cfg.process.terminate()
+                    output_cfg.process.wait(timeout=2) # Short wait
+                except subprocess.TimeoutExpired:
+                    output_cfg.process.kill()
+                except Exception:
+                    pass # Ignore other errors during cancellation
+            output_cfg.process = None
+
+    def pause_all_outputs(self):
+        """Pauses all running individual output processes."""
+        if self.is_cancelled: return
+        paused_any = False
+        for output_cfg in self.outputs:
+            if output_cfg.status == "running" and output_cfg.process and output_cfg.process.poll() is None and not output_cfg.is_paused:
+                try:
+                    import signal
+                    output_cfg.process.send_signal(signal.SIGSTOP)
+                    output_cfg.is_paused = True
+                    output_cfg.status = "paused"
+                    paused_any = True
+                except Exception:
+                    pass # log this?
+        return paused_any
+
+    def resume_all_outputs(self):
+        """Resumes all paused individual output processes."""
+        if self.is_cancelled: return
+        resumed_any = False
+        for output_cfg in self.outputs:
+            if output_cfg.status == "paused" and output_cfg.process and output_cfg.process.poll() is None and output_cfg.is_paused:
+                try:
+                    import signal
+                    output_cfg.process.send_signal(signal.SIGCONT)
+                    output_cfg.is_paused = False
+                    output_cfg.status = "running" # Set back to running
+                    resumed_any = True
+                except Exception:
+                    pass # log this?
+        return resumed_any
 
     def __str__(self):
-        return f"EncodeJob({self.src_path.name} -> {self.dst_path.name}, {self.status})"
+        num_outputs = len(self.outputs)
+        if num_outputs == 1:
+            # For single output, display can be similar to before
+            # return f"EncodeJob({self.src_path.name} -> {self.outputs[0].dst_path.name}, {self.outputs[0].status})"
+            # For now, always indicate potential for multiple outputs
+            return f"EncodeJob({self.src_path.name}, {num_outputs} output(s), {self.get_overall_status()})"
+
+        return f"EncodeJob({self.src_path.name}, {num_outputs} outputs, {self.get_overall_status()})"
+
+
+# The old EncodeJob methods like cancel(), pause(), resume() that acted on a single self.process
+# are now replaced by cancel_all_outputs(), pause_all_outputs(), resume_all_outputs()
+# which iterate over output_cfg.process.
+# The individual output_cfg.process, output_cfg.status, output_cfg.progress, output_cfg.is_paused
+# will be managed by the worker pool for each specific output task.

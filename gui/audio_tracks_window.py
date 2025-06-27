@@ -93,7 +93,35 @@ class AudioTracksWindow:
         ttk.Button(button_frame, text="Select None", command=self._select_no_tracks).pack(side="left", padx=(5, 0))
         
         ttk.Button(button_frame, text="Cancel", command=self.window.destroy).pack(side="right")
-        ttk.Button(button_frame, text="Apply", command=self._apply_settings).pack(side="right", padx=(0, 10))
+        ttk.Button(button_frame, text="Apply to Encode", command=self._apply_settings).pack(side="right", padx=(0, 10)) # Renamed Apply
+
+        # Extraction Section
+        extract_frame = ttk.LabelFrame(main_frame, text="Extract Audio Track", padding=10)
+        extract_frame.pack(fill="x", pady=(10,0))
+
+        extract_controls_frame = ttk.Frame(extract_frame)
+        extract_controls_frame.pack(fill="x")
+
+        ttk.Label(extract_controls_frame, text="Format:").pack(side=tk.LEFT, padx=(0,5))
+        self.extract_audio_format_var = StringVar(value="copy") # Default to copy stream
+        extract_audio_format_options = ["copy", "aac", "mp3", "flac", "wav", "opus"]
+        self.extract_audio_format_combo = ttk.Combobox(extract_controls_frame, textvariable=self.extract_audio_format_var,
+                                                       values=extract_audio_format_options, state="readonly", width=10)
+        self.extract_audio_format_combo.pack(side=tk.LEFT, padx=(0,10))
+        self.extract_audio_format_combo.bind("<<ComboboxSelected>>", self._on_extract_format_change)
+
+
+        self.extract_audio_bitrate_label = ttk.Label(extract_controls_frame, text="Bitrate:")
+        self.extract_audio_bitrate_label.pack(side=tk.LEFT, padx=(5,5))
+        self.extract_audio_bitrate_var = StringVar(value="192k")
+        extract_audio_bitrate_options = ["96k", "128k", "160k", "192k", "256k", "320k"]
+        self.extract_audio_bitrate_combo = ttk.Combobox(extract_controls_frame, textvariable=self.extract_audio_bitrate_var,
+                                                       values=extract_audio_bitrate_options, width=8) # Not readonly, user can type
+        self.extract_audio_bitrate_combo.pack(side=tk.LEFT, padx=(0,10))
+        self._on_extract_format_change() # Initial state for bitrate combo
+
+        extract_button = ttk.Button(extract_controls_frame, text="Extract Selected Track...", command=self._extract_selected_track)
+        extract_button.pack(side=tk.LEFT, padx=(10,0))
         
         # Bind double-click pour toggle include
         self.tracks_tree.bind("<Double-1>", self._toggle_track_include)
@@ -306,3 +334,101 @@ class AudioTracksWindow:
         
         messagebox.showinfo("Success", "Audio configuration applied successfully!")
         self.window.destroy()
+
+    def _on_extract_format_change(self, event=None):
+        """Enable/disable bitrate combobox based on selected extract format."""
+        selected_format = self.extract_audio_format_var.get()
+        lossy_formats = ["aac", "mp3", "opus", "vorbis"] # vorbis not in options yet but good to list
+
+        if selected_format in lossy_formats:
+            self.extract_audio_bitrate_combo.config(state="normal")
+            self.extract_audio_bitrate_label.config(state="normal")
+        else: # copy, flac, wav (lossless or copy)
+            self.extract_audio_bitrate_combo.config(state="disabled")
+            self.extract_audio_bitrate_label.config(state="disabled")
+
+    def _extract_selected_track(self):
+        selected_items = self.tracks_tree.selection()
+        if not selected_items:
+            messagebox.showwarning("No Selection", "Please select an audio track to extract.", parent=self.window)
+            return
+
+        item_id = selected_items[0] # This is the python list index
+        try:
+            track_list_index = int(item_id)
+            track_info = self.audio_tracks[track_list_index]
+        except (ValueError, IndexError):
+            messagebox.showerror("Error", "Invalid track selection.", parent=self.window)
+            return
+
+        source_ffmpeg_track_index = track_info["stream_index"] # This is the actual index from ffprobe
+        extract_format = self.extract_audio_format_var.get()
+
+        # Determine default extension and initial filename
+        default_ext = extract_format
+        if extract_format == "copy":
+            # Try to guess original extension from codec, or use a generic one
+            codec_to_ext = {"aac": "m4a", "mp3": "mp3", "flac": "flac", "pcm_s16le": "wav", "opus": "opus"}
+            default_ext = codec_to_ext.get(track_info["codec"], "audio") # Fallback to .audio
+
+        default_filename = f"{self.job.src_path.stem}_audio_track_{source_ffmpeg_track_index}.{default_ext}"
+
+        # Determine output directory
+        # Try to use the main output folder if set in MainWindow, else source file's parent
+        output_dir = self.job.src_path.parent # Default
+        if hasattr(self.window.master, "output_folder"): # Access MainWindow's output_folder
+            main_output_folder_str = self.window.master.output_folder.get()
+            if main_output_folder_str and not main_output_folder_str.startswith("No output"):
+                output_dir = Path(main_output_folder_str)
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        save_path_str = filedialog.asksaveasfilename(
+            parent=self.window,
+            title="Save Extracted Audio Track As",
+            initialdir=str(output_dir),
+            initialfile=default_filename,
+            defaultextension=f".{default_ext}",
+            filetypes=[(f"{default_ext.upper()} files", f"*.{default_ext}"), ("All files", "*.*")]
+        )
+
+        if not save_path_str:
+            return
+
+        save_path = Path(save_path_str)
+
+        # Prepare FFmpeg command
+        cmd_extract = ["ffmpeg", "-y", "-i", str(self.job.src_path), "-map", f"0:{source_ffmpeg_track_index}"]
+
+        if extract_format == "copy":
+            cmd_extract.extend(["-c:a", "copy"])
+        else:
+            cmd_extract.extend(["-c:a", extract_format])
+            if self.extract_audio_bitrate_combo.cget('state') != 'disabled': # Check if bitrate is applicable
+                bitrate = self.extract_audio_bitrate_var.get()
+                if bitrate:
+                    cmd_extract.extend(["-b:a", bitrate])
+
+        cmd_extract.append(str(save_path))
+
+        # Run in a thread
+        self.window.master.status_label.config(text=f"Extracting audio to {save_path.name}...") # Use main window status
+
+        def do_extract_audio():
+            try:
+                process = subprocess.run(cmd_extract, capture_output=True, text=True, check=True, encoding='utf-8')
+                self.window.master.status_label.config(text=f"Audio extracted: {save_path.name}")
+                messagebox.showinfo("Success", f"Audio track extracted successfully to:\n{save_path}", parent=self.window)
+            except FileNotFoundError:
+                messagebox.showerror("Error", "FFmpeg not found.", parent=self.window)
+                self.window.master.status_label.config(text="Error: FFmpeg not found.")
+            except subprocess.CalledProcessError as e:
+                error_msg = f"FFmpeg extraction error: {e.stderr or e.stdout or 'Unknown FFmpeg error'}"
+                print(error_msg)
+                messagebox.showerror("Error", error_msg, parent=self.window)
+                self.window.master.status_label.config(text="Audio extraction failed.")
+            except Exception as e:
+                messagebox.showerror("Error", f"An unexpected error occurred: {e}", parent=self.window)
+                self.window.master.status_label.config(text="Audio extraction error.")
+
+        threading.Thread(target=do_extract_audio, daemon=True).start()
