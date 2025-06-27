@@ -78,11 +78,15 @@ class FFmpegHelpers:
                                 image.add(name)
                             elif "S" in flags or "I" in flags:
                                 image.add(name)
-                # Add common image codecs if missing
-                for extra in ["jpg", "jpeg", "webp", "png", "avif", "tiff", "bmp", "jxl", "jpegxl"]:
-                    image.add(extra)
+                # Add common image codecs if missing or to ensure they are categorized as image
+                common_image_formats = {"jpg", "jpeg", "webp", "png", "avif", "tiff", "bmp", "jxl", "jpegxl", "heic", "heif"}
+                for extra in common_image_formats:
+                    # Add them if they are actual codec names or just as format identifiers
+                    # This ensures they appear in UI lists for image format selection.
+                    image.add(extra) # We can refine later if 'hevc' is a codec vs 'heif' the format.
+
                 cls._codecs_cache = {
-                    "video": sorted(video),
+                    "video": sorted(list(video)), # Convert set to list before sorting
                     "audio": sorted(audio),
                     "image": sorted(image)
                 }
