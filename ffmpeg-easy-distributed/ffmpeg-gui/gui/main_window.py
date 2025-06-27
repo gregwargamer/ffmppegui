@@ -165,11 +165,7 @@ class MainWindow:
         except Exception:
             pass
         
-        self.job_scheduler.register_progress_callback(self._on_job_progress)
-        self.job_scheduler.register_completion_callback(self._on_job_completion)
-        self.job_scheduler.register_all_jobs_finished_callback(self._on_all_jobs_finished)
-
-        # Initialiser les variables manquantes
+        # Initialiser toutes les variables AVANT de construire l'interface
         self.global_type_var = StringVar(value="unknown")
         self.global_encoder_var = StringVar()
         self.quality_var = StringVar()
@@ -194,6 +190,10 @@ class MainWindow:
         self.watermark_scale_var = DoubleVar(value=0.1)
         self.watermark_opacity_var = DoubleVar(value=1.0)
         self.watermark_padding_var = IntVar(value=10)
+
+        self.job_scheduler.register_progress_callback(self._on_job_progress)
+        self.job_scheduler.register_completion_callback(self._on_job_completion)
+        self.job_scheduler.register_all_jobs_finished_callback(self._on_all_jobs_finished)
 
     def _build_layout(self):
         main_paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)

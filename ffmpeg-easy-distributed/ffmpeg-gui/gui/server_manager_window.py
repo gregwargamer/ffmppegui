@@ -20,9 +20,16 @@ class ServerManagerWindow:
         self.window.geometry("800x600")
         self.window.protocol("WM_DELETE_WINDOW", self._on_closing)
         
+        # Donner le focus à la fenêtre
+        self.window.grab_set()
+        self.window.focus_set()
+        
         self.build_ui()
         self.server_discovery.register_server_update_callback(self.refresh_display)
         asyncio.create_task(self._initial_load_servers())
+        
+        # Mettre le focus sur le champ IP après construction de l'interface
+        self.window.after(100, lambda: self.ip_entry.focus_set())
 
     def _on_closing(self):
         self.window.destroy()
@@ -45,11 +52,13 @@ class ServerManagerWindow:
         
         ttk.Label(add_frame, text="IP:").grid(row=0, column=0, padx=5, pady=5)
         self.ip_var = tk.StringVar(value="localhost")
-        ttk.Entry(add_frame, textvariable=self.ip_var, width=15).grid(row=0, column=1, padx=5, pady=5)
+        self.ip_entry = ttk.Entry(add_frame, textvariable=self.ip_var, width=15)
+        self.ip_entry.grid(row=0, column=1, padx=5, pady=5)
         
         ttk.Label(add_frame, text="Port:").grid(row=0, column=2, padx=5, pady=5)
         self.port_var = tk.StringVar(value="8765")
-        ttk.Entry(add_frame, textvariable=self.port_var, width=8).grid(row=0, column=3, padx=5, pady=5)
+        self.port_entry = ttk.Entry(add_frame, textvariable=self.port_var, width=8)
+        self.port_entry.grid(row=0, column=3, padx=5, pady=5)
         
         ttk.Button(add_frame, text="Ajouter", command=self.add_server_action).grid(row=0, column=4, padx=5, pady=5)
         
