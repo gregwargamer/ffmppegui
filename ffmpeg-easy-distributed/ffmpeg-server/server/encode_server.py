@@ -4,6 +4,7 @@ import logging
 import uuid
 from typing import Dict, Set, Optional, List
 from pathlib import Path
+import psutil
 import time
 
 from shared.protocol import Message, MessageType, send_message, receive_message, ProtocolError
