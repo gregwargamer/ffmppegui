@@ -12,7 +12,9 @@ import sys
 from pathlib import Path
 
 # Add the shared directory to the path
-sys.path.append(str(Path(__file__).resolve().parents[1] / 'ffmpeg-gui' / 'shared'))
+# sys.path.append(str(Path(__file__).resolve().parents[1] / 'ffmpeg-gui' / 'shared'))
+# This line is no longer needed as 'shared' will be a subdirectory of the install directory,
+# and Python will find it automatically when main.py is run from there.
 
 from server.encode_server import EncodeServer
 from server.config_manager import ServerConfig

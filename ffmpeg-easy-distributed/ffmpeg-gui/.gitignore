@@ -8,3 +8,6 @@ test_media/sample_audio.wav
 test_media/sample_image.jpg
 test_media/sample_video.mp4
 .idea/.gitignore
+
+# Virtual environment for GUI
+venv-gui/
