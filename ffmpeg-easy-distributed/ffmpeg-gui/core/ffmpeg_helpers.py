@@ -36,6 +36,11 @@ class FFmpegHelpers:
                             elif "heic" in encoder_name or "hevc_image" in encoder_name: implemented_codec = "heic"
                             elif "aac" in encoder_name: implemented_codec = "aac"
                             elif "mp3" in encoder_name: implemented_codec = "mp3" # Use "mp3" to match available_codecs
+                            elif "flac" == encoder_name: implemented_codec = "flac"
+                            elif "alac" == encoder_name: implemented_codec = "alac"
+                            elif "pcm_s16le" == encoder_name: implemented_codec = "pcm_s16le"
+                            elif "opus" in encoder_name: implemented_codec = "opus" # e.g. libopus
+                            elif "vorbis" in encoder_name: implemented_codec = "vorbis" # e.g. libvorbis
 
                         encoders.append({
                             "name": encoder_name,
