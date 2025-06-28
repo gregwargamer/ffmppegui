@@ -84,10 +84,35 @@ class EncodeServer:
         self.logger.info(f"👋 Client connecté: {client_addr} (ID: {client_id})")
         
         try:
+            # Le client attend un HELLO, mais notre protocole est que le serveur envoie directement ses infos.
+            # On attend le HELLO du client avant d'envoyer nos infos.
+            self.logger.debug(f"Attente du message HELLO du client {client_id}")
+            
+            # Le client envoie HELLO juste après la connexion.
+            # On doit donc lire ce premier message ici.
+            try:
+                raw_message = await asyncio.wait_for(websocket.recv(), timeout=10)
+                message = Message.from_json(raw_message)
+                if message.type == MessageType.HELLO:
+                    client_name = message.data.get("client_name", "Inconnu")
+                    self.logger.info(f"Message HELLO reçu du client {client_id} ({client_name})")
+                else:
+                    self.logger.warning(f"Premier message n'était pas HELLO (reçu: {message.type}). On continue quand même.")
+            except asyncio.TimeoutError:
+                self.logger.error(f"Timeout en attente du HELLO du client {client_id}. Fermeture connexion.")
+                return
+            except Exception as e:
+                self.logger.error(f"Erreur en lisant le message HELLO du client {client_id}: {e}", exc_info=True)
+                return
+
+
+            self.logger.debug(f"Envoi des informations du serveur au client {client_id}")
             await self.send_server_info(websocket)
+            self.logger.info(f"Informations du serveur envoyées avec succès au client {client_id}")
             
             async for raw_message in websocket:
                 try:
+                    self.logger.debug(f"Message brut reçu de {client_id}: {raw_message}")
                     message = Message.from_json(raw_message)
                     await self.process_message(client_id, websocket, message)
                 except ProtocolError as e:
@@ -95,51 +120,66 @@ class EncodeServer:
                     error_msg = Message(MessageType.VALIDATION_ERROR, {"error": str(e)})
                     await send_message(websocket, error_msg)
                 
-        except websockets.exceptions.ConnectionClosed:
-            self.logger.info(f"👋 Client déconnecté: {client_addr}")
+        except websockets.exceptions.ConnectionClosed as e:
+            self.logger.info(f"👋 Client déconnecté: {client_addr} (code: {e.code}, raison: {e.reason})")
         except Exception as e:
-            self.logger.error(f"❌ Erreur client {client_id}: {e}")
+            self.logger.error(f"❌ Erreur critique dans handle_client pour {client_id}: {e}", exc_info=True)
         finally:
+            self.logger.debug(f"Nettoyage de la connexion pour le client {client_id}")
             if client_id in self.clients:
                 del self.clients[client_id]
     
     async def send_server_info(self, websocket):
         """Envoie les informations du serveur au client"""
-        # Convertir les capacités en dictionnaire sérialisable
-        capabilities_dict = {
-            'hostname': self.capabilities.hostname,
-            'os': self.capabilities.os,
-            'cpu_cores': self.capabilities.cpu_cores,
-            'memory_gb': self.capabilities.memory_gb,
-            'disk_space_gb': self.capabilities.disk_space_gb,
-            'software_encoders': self.capabilities.software_encoders,
-            'hardware_encoders': self.capabilities.hardware_encoders,
-            'estimated_performance': self.capabilities.estimated_performance,
-            'current_load': self.capabilities.current_load,
-            'max_resolution': self.capabilities.max_resolution,
-            'supported_formats': self.capabilities.supported_formats,
-            'max_file_size_gb': self.capabilities.max_file_size_gb
-        }
-        
-        server_info_dict = {
-            'server_id': self.server_id,
-            'name': self.config.name or self.capabilities.hostname,
-            'ip': self.config.host,
-            'port': self.config.port,
-            'status': self.status.value,  # Convertir l'enum en string
-            'capabilities': capabilities_dict,
-            'max_jobs': self.config.max_jobs,
-            'current_jobs': len(self.active_jobs),
-            'uptime': time.time() - self.start_time,
-            'last_seen': time.time()
-        }
-        
-        message = Message(MessageType.SERVER_INFO, server_info_dict)
-        await send_message(websocket, message)
+        try:
+            self.logger.debug("Construction du message SERVER_INFO...")
+            # Convertir les capacités en dictionnaire sérialisable
+            capabilities_dict = {
+                'hostname': self.capabilities.hostname,
+                'os': self.capabilities.os,
+                'cpu_cores': self.capabilities.cpu_cores,
+                'memory_gb': self.capabilities.memory_gb,
+                'disk_space_gb': self.capabilities.disk_space_gb,
+                'software_encoders': self.capabilities.software_encoders,
+                'hardware_encoders': self.capabilities.hardware_encoders,
+                'estimated_performance': self.capabilities.estimated_performance,
+                'current_load': self.capabilities.current_load,
+                'max_resolution': self.capabilities.max_resolution,
+                'supported_formats': self.capabilities.supported_formats,
+                'max_file_size_gb': self.capabilities.max_file_size_gb
+            }
+            
+            server_info_dict = {
+                'server_id': self.server_id,
+                'name': self.config.name or self.capabilities.hostname,
+                'ip': self.config.host,
+                'port': self.config.port,
+                'status': self.status.value,  # Convertir l'enum en string
+                'capabilities': capabilities_dict,
+                'max_jobs': self.config.max_jobs,
+                'current_jobs': len(self.active_jobs),
+                'uptime': time.time() - self.start_time,
+                'last_seen': time.time()
+            }
+            self.logger.debug(f"Données SERVER_INFO prêtes: {server_info_dict}")
+            
+            message = Message(MessageType.SERVER_INFO, server_info_dict)
+            self.logger.debug("Envoi du message SERVER_INFO...")
+            await send_message(websocket, message)
+            self.logger.debug("Message SERVER_INFO envoyé.")
+        except Exception as e:
+            self.logger.error(f"Erreur fatale lors de l'envoi de SERVER_INFO: {e}", exc_info=True)
+            # Cette erreur peut causer la fermeture de la connexion par le serveur.
+            await websocket.close(code=1011, reason="Internal server error during info exchange")
+            raise  # Relauncer l'exception pour que handle_client la capture.
     
     async def process_message(self, client_id: str, websocket, message: Message):
-        self.logger.debug(f"📨 Message reçu de {client_id}: {message.type}")
+        self.logger.debug(f"📨 Message reçu de {client_id}: {message.type} - Contenu: {message.data}")
         
+        if message.type == MessageType.HELLO:
+            # Déjà traité dans handle_client, mais on peut logger ici si besoin.
+            self.logger.info(f"Message HELLO (re)reçu de {client_id}. Normalement ignoré ici.")
+            return # Ne rien faire, la poignée de main est déjà faite.
         if message.type == MessageType.PING:
             await self.handle_ping(websocket, message)
         elif message.type == MessageType.CAPABILITY_REQUEST:

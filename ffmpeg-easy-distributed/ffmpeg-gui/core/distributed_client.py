@@ -30,15 +30,20 @@ class DistributedClient:
         try:
             websocket = await websockets.connect(uri, open_timeout=self.settings.distributed.default_timeout)
             self.active_connections[uri] = websocket
-            self.logger.info(f"Connecté au serveur: {uri}")
+            self.logger.info(f"Connecté au serveur: {uri}. Envoi du message HELLO.")
 
             # Envoyer un message HELLO pour initier la communication
             hello_msg = Message(MessageType.HELLO, {"client_name": "FFmpegEasyGUI"})
+            self.logger.debug(f"Envoi du HELLO: {hello_msg.to_json()}")
             await send_message(websocket, hello_msg)
 
             # Attendre les informations du serveur
+            self.logger.debug(f"Attente de la réponse SERVER_INFO de {uri}")
             response = await asyncio.wait_for(receive_message(websocket), timeout=5)
+            self.logger.debug(f"Réponse reçue de {uri}: type={response.type}")
+
             if response.type == MessageType.SERVER_INFO:
+                self.logger.debug(f"Données SERVER_INFO brutes: {response.data}")
                 # Créer l'objet ServerCapabilities à partir du dictionnaire
                 caps_data = response.data['capabilities']
                 capabilities = ServerCapabilities(**caps_data)
@@ -58,6 +63,7 @@ class DistributedClient:
                 )
                 self.servers[server_info.server_id] = server_info
                 self.logger.info(f"Informations serveur reçues de {uri}: {server_info.name}")
+                self.logger.debug(f"Détails du serveur: {server_info}")
                 asyncio.create_task(self._listen_to_server(uri, websocket))
                 return server_info
             else:
@@ -66,23 +72,27 @@ class DistributedClient:
                 del self.active_connections[uri]
                 return None
         except Exception as e:
-            self.logger.error(f"Échec de connexion au serveur {uri}: {e}")
+            self.logger.error(f"Échec de connexion au serveur {uri}: {e}", exc_info=True)
             if uri in self.active_connections:
                 del self.active_connections[uri]
             return None
 
     async def _listen_to_server(self, uri: str, websocket: websockets.WebSocketClientProtocol):
         """Écoute les messages entrants d'un serveur connecté."""
+        self.logger.debug(f"Démarrage de l'écoute des messages pour {uri}")
         try:
             while True:
                 message = await receive_message(websocket)
+                self.logger.debug(f"Message reçu dans la boucle d'écoute de {uri}: {message.type}")
                 await self._process_server_message(uri, message)
         except websockets.exceptions.ConnectionClosedOK:
-            self.logger.info(f"Connexion fermée avec {uri}")
+            self.logger.info(f"Connexion fermée proprement avec {uri}")
+        except websockets.exceptions.ConnectionClosedError as e:
+            self.logger.warning(f"Connexion fermée avec erreur pour {uri}: code={e.code}, reason='{e.reason}'")
         except Exception as e:
-            self.logger.error(f"Erreur d'écoute sur {uri}: {e}")
+            self.logger.error(f"Erreur d'écoute sur {uri}: {e}", exc_info=True)
         finally:
-            self.logger.info(f"Déconnexion de {uri}. Tentative de reconnexion...")
+            self.logger.info(f"Déconnexion de {uri}. Nettoyage et tentative de reconnexion si nécessaire.")
             if uri in self.active_connections:
                 del self.active_connections[uri]
             # Tenter de se reconnecter

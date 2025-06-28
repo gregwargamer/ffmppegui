@@ -103,8 +103,9 @@ class MessageValidator:
 async def send_message(websocket, message: Message) -> None:
     """Envoie un message via WebSocket avec gestion d'erreur"""
     try:
-        await websocket.send(message.to_json())
-        logging.debug(f"Message envoyé: {message.type.value}")
+        json_message = message.to_json()
+        logging.debug(f"Message envoyé: {message.type.value}, Contenu: {json_message}")
+        await websocket.send(json_message)
     except Exception as e:
         logging.error(f"Erreur envoi message: {e}")
         raise ProtocolError(f"Failed to send message: {e}")
@@ -113,8 +114,9 @@ async def receive_message(websocket) -> Message:
     """Reçoit un message via WebSocket avec timeout"""
     try:
         raw_message = await asyncio.wait_for(websocket.recv(), timeout=30.0)
+        logging.debug(f"Message brut reçu: {raw_message}")
         message = Message.from_json(raw_message)
-        logging.debug(f"Message reçu: {message.type.value}")
+        logging.debug(f"Message reçu déserialisé: {message.type.value}")
         return message
     except asyncio.TimeoutError:
         raise ProtocolError("Message reception timeout")
