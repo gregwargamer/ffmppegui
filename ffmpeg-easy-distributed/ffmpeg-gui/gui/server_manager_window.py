@@ -56,12 +56,12 @@ class ServerManagerWindow:
         add_frame.pack(fill=tk.X, pady=(0, 10))
         
         ttk.Label(add_frame, text="IP:").grid(row=0, column=0, padx=5, pady=5)
-        self.ip_var = tk.StringVar(value="localhost")
+        self.ip_var = tk.StringVar(master=self.window, value="localhost")
         self.ip_entry = ttk.Entry(add_frame, textvariable=self.ip_var, width=15)
         self.ip_entry.grid(row=0, column=1, padx=5, pady=5)
         
         ttk.Label(add_frame, text="Port:").grid(row=0, column=2, padx=5, pady=5)
-        self.port_var = tk.StringVar(value="8765")
+        self.port_var = tk.StringVar(master=self.window, value="8765")
         self.port_entry = ttk.Entry(add_frame, textvariable=self.port_var, width=8)
         self.port_entry.grid(row=0, column=3, padx=5, pady=5)
         
@@ -195,5 +195,5 @@ class ServerManagerWindow:
                 else:
                     messagebox.showerror("Ping", f"Serveur {server_info.name} ({server_info.ip}:{server_info.port}) n'est PAS joignable.")
             else:
-                messagebox.warning("Ping", f"Serveur avec ID {server_id} non trouvé.")
+                messagebox.showwarning("Ping", f"Serveur avec ID {server_id} non trouvé.")
         self.refresh_display(list(self.server_discovery.get_all_servers().values()))

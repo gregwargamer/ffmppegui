@@ -104,7 +104,20 @@ class AsyncTkApp:
 
 def main():
     """Point d'entrée principal de l'application."""
-    root = tk.Tk()
+    # Tentative d'initialisation de TkinterDnD avec fallback
+    dnd_available = False
+    try:
+        from tkinterdnd2 import TkinterDnD
+        root = TkinterDnD.Tk()
+        dnd_available = True
+        print("TkinterDnD2 initialisé avec succès - Drag & Drop disponible")
+    except Exception as e:
+        print(f"Impossible d'initialiser TkinterDnD2: {e}")
+        print("Utilisation de Tkinter standard - Drag & Drop désactivé")
+        import tkinter as tk
+        root = tk.Tk()
+        dnd_available = False
+
     app = AsyncTkApp(root)
 
     try:
@@ -116,19 +129,28 @@ def main():
         # Charger les settings pour les composants (format dataclass)
         settings = load_settings()
 
+        # Initialisation de la nouvelle architecture State/Controller
+        from core.app_state import AppState
+        from core.app_controller import AppController
+        
+        app_state = AppState(settings)
+        
         # Initialisation des composants principaux
         distributed_client = DistributedClient(settings)
         server_discovery = ServerDiscovery(distributed_client, settings)
         capability_matcher = CapabilityMatcher()
         job_scheduler = JobScheduler(distributed_client, capability_matcher)
         
+        # Création du contrôleur principal
+        app_controller = AppController(app_state, job_scheduler, distributed_client, server_discovery)
+        
         # Fonction pour exécuter des tâches async depuis l'interface
         def run_async_func(coro, loop=None):
             # Le paramètre loop est ignoré car on utilise toujours app.loop
             return app.loop.create_task(coro)
 
-        # Création de la fenêtre principale
-        main_window = MainWindow(root, distributed_client, server_discovery, job_scheduler, app.loop, run_async_func)
+        # Création de la fenêtre principale avec la nouvelle architecture
+        main_window = MainWindow(root, app_state, app_controller, app.loop, run_async_func, dnd_available=dnd_available)
         
         # Lancer les tâches de fond
         app.loop.create_task(server_discovery.start_discovery())

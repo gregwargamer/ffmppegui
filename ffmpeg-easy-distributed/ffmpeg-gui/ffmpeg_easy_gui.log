@@ -109,3 +109,117 @@
 2025-06-28 15:45:23,341 - core.distributed_client - INFO - Job 312356c0-e991-4370-883c-7fc33d8cfe9a soumis au serveur 2ea4b33e-9366-4cce-a99e-9d2af2b51d3a
 2025-06-28 15:45:23,341 - core.distributed_client - INFO - Job 16bca2ee-3bdd-44bb-9c5f-f3f922011519 soumis au serveur 2ea4b33e-9366-4cce-a99e-9d2af2b51d3a
 2025-06-28 15:45:23,341 - core.distributed_client - INFO - Job 24c82cd0-b4f0-4f67-bad1-19194d08b143 soumis au serveur 2ea4b33e-9366-4cce-a99e-9d2af2b51d3a
+2025-06-28 16:27:15,158 - core.hardware_detector - INFO - 🔍 Détection des capacités du serveur...
+2025-06-28 16:27:18,237 - core.hardware_detector - INFO - ✅ Capacités détectées: 11 logiciels, 0 matériels
+2025-06-28 16:27:18,237 - core.local_server - INFO - 🔧 Serveur local initialisé avec 11 encodeurs
+2025-06-28 16:27:18,241 - root - ERROR - Une erreur fatale et non gérée est survenue
+Traceback (most recent call last):
+  File "/Users/gregoire/PycharmProjects/ffmpegeaesy/ffmpeg-easy-distributed/ffmpeg-gui/main.py", line 153, in main
+    main_window = MainWindow(root, app_state, app_controller, app.loop, run_async_func, dnd_available=dnd_available)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/gregoire/PycharmProjects/ffmpegeaesy/ffmpeg-easy-distributed/ffmpeg-gui/gui/main_window.py", line 161, in __init__
+    self._build_menu()
+  File "/Users/gregoire/PycharmProjects/ffmpegeaesy/ffmpeg-easy-distributed/ffmpeg-gui/gui/main_window.py", line 834, in _build_menu
+    for preset_name in self.settings.data["presets"].keys():
+                       ^^^^^^^^^^^^^
+AttributeError: 'MainWindow' object has no attribute 'settings'
+2025-06-28 16:49:05,701 - core.hardware_detector - INFO - 🔍 Détection des capacités du serveur...
+2025-06-28 16:49:08,770 - core.hardware_detector - INFO - ✅ Capacités détectées: 11 logiciels, 0 matériels
+2025-06-28 16:49:08,770 - core.local_server - INFO - 🔧 Serveur local initialisé avec 11 encodeurs
+2025-06-28 16:49:08,780 - gui.main_window - ERROR - Erreur lors de la mise à jour de l'interface: 'MainWindow' object has no attribute 'tree'
+Traceback (most recent call last):
+  File "/Users/gregoire/PycharmProjects/ffmpegeaesy/ffmpeg-easy-distributed/ffmpeg-gui/gui/main_window.py", line 183, in _on_state_changed
+    self._update_ui_from_state()
+  File "/Users/gregoire/PycharmProjects/ffmpegeaesy/ffmpeg-easy-distributed/ffmpeg-gui/gui/main_window.py", line 190, in _update_ui_from_state
+    self._update_jobs_display()
+  File "/Users/gregoire/PycharmProjects/ffmpegeaesy/ffmpeg-easy-distributed/ffmpeg-gui/gui/main_window.py", line 210, in _update_jobs_display
+    current_items = set(self.tree.get_children())
+                        ^^^^^^^^^
+AttributeError: 'MainWindow' object has no attribute 'tree'
+2025-06-28 16:49:08,831 - gui.main_window - ERROR - Erreur lors de la mise à jour de l'interface: 'MainWindow' object has no attribute 'tree'
+Traceback (most recent call last):
+  File "/Users/gregoire/PycharmProjects/ffmpegeaesy/ffmpeg-easy-distributed/ffmpeg-gui/gui/main_window.py", line 183, in _on_state_changed
+    self._update_ui_from_state()
+  File "/Users/gregoire/PycharmProjects/ffmpegeaesy/ffmpeg-easy-distributed/ffmpeg-gui/gui/main_window.py", line 190, in _update_ui_from_state
+    self._update_jobs_display()
+  File "/Users/gregoire/PycharmProjects/ffmpegeaesy/ffmpeg-easy-distributed/ffmpeg-gui/gui/main_window.py", line 210, in _update_jobs_display
+    current_items = set(self.tree.get_children())
+                        ^^^^^^^^^
+AttributeError: 'MainWindow' object has no attribute 'tree'
+2025-06-28 16:49:08,874 - gui.main_window - ERROR - Erreur lors de la mise à jour de l'interface: 'MainWindow' object has no attribute 'tree'
+Traceback (most recent call last):
+  File "/Users/gregoire/PycharmProjects/ffmpegeaesy/ffmpeg-easy-distributed/ffmpeg-gui/gui/main_window.py", line 183, in _on_state_changed
+    self._update_ui_from_state()
+  File "/Users/gregoire/PycharmProjects/ffmpegeaesy/ffmpeg-easy-distributed/ffmpeg-gui/gui/main_window.py", line 190, in _update_ui_from_state
+    self._update_jobs_display()
+  File "/Users/gregoire/PycharmProjects/ffmpegeaesy/ffmpeg-easy-distributed/ffmpeg-gui/gui/main_window.py", line 210, in _update_jobs_display
+    current_items = set(self.tree.get_children())
+                        ^^^^^^^^^
+AttributeError: 'MainWindow' object has no attribute 'tree'
+2025-06-28 16:49:08,875 - gui.main_window - ERROR - Erreur lors de la mise à jour de l'interface: 'MainWindow' object has no attribute 'tree'
+Traceback (most recent call last):
+  File "/Users/gregoire/PycharmProjects/ffmpegeaesy/ffmpeg-easy-distributed/ffmpeg-gui/gui/main_window.py", line 183, in _on_state_changed
+    self._update_ui_from_state()
+  File "/Users/gregoire/PycharmProjects/ffmpegeaesy/ffmpeg-easy-distributed/ffmpeg-gui/gui/main_window.py", line 190, in _update_ui_from_state
+    self._update_jobs_display()
+  File "/Users/gregoire/PycharmProjects/ffmpegeaesy/ffmpeg-easy-distributed/ffmpeg-gui/gui/main_window.py", line 210, in _update_jobs_display
+    current_items = set(self.tree.get_children())
+                        ^^^^^^^^^
+AttributeError: 'MainWindow' object has no attribute 'tree'
+2025-06-28 16:49:08,875 - gui.main_window - ERROR - Erreur lors de la mise à jour de l'interface: 'MainWindow' object has no attribute 'tree'
+Traceback (most recent call last):
+  File "/Users/gregoire/PycharmProjects/ffmpegeaesy/ffmpeg-easy-distributed/ffmpeg-gui/gui/main_window.py", line 183, in _on_state_changed
+    self._update_ui_from_state()
+  File "/Users/gregoire/PycharmProjects/ffmpegeaesy/ffmpeg-easy-distributed/ffmpeg-gui/gui/main_window.py", line 190, in _update_ui_from_state
+    self._update_jobs_display()
+  File "/Users/gregoire/PycharmProjects/ffmpegeaesy/ffmpeg-easy-distributed/ffmpeg-gui/gui/main_window.py", line 210, in _update_jobs_display
+    current_items = set(self.tree.get_children())
+                        ^^^^^^^^^
+AttributeError: 'MainWindow' object has no attribute 'tree'
+2025-06-28 16:49:08,876 - gui.main_window - WARNING - ⚠️ TkinterDnD2 non disponible - drag and drop désactivé
+2025-06-28 16:49:08,877 - core.server_discovery - INFO - Démarrage de la découverte des serveurs...
+2025-06-28 16:49:08,877 - core.distributed_client - INFO - Tentative de connexion au serveur: ws://192.168.1.80:8765
+2025-06-28 16:49:08,880 - core.job_scheduler - INFO - Démarrage du planificateur de jobs...
+2025-06-28 16:49:09,106 - gui.main_window - INFO - ✅ Interface adaptative initialisée - Type de média: video
+2025-06-28 16:49:09,108 - gui.main_window - INFO - 🎯 Interface utilisateur entièrement initialisée
+2025-06-28 16:49:09,579 - core.distributed_client - INFO - Connecté au serveur: ws://192.168.1.80:8765. Envoi du message HELLO.
+2025-06-28 16:49:09,706 - core.distributed_client - INFO - Informations serveur reçues de ws://192.168.1.80:8765: ffmpeg1
+2025-06-28 16:55:35,828 - core.hardware_detector - INFO - 🔍 Détection des capacités du serveur...
+2025-06-28 16:55:38,895 - core.hardware_detector - INFO - ✅ Capacités détectées: 11 logiciels, 0 matériels
+2025-06-28 16:55:38,896 - core.local_server - INFO - 🔧 Serveur local initialisé avec 11 encodeurs
+2025-06-28 16:55:39,005 - gui.main_window - WARNING - ⚠️ TkinterDnD2 non disponible - drag and drop désactivé
+2025-06-28 16:55:39,006 - core.server_discovery - INFO - Démarrage de la découverte des serveurs...
+2025-06-28 16:55:39,006 - core.distributed_client - INFO - Tentative de connexion au serveur: ws://192.168.1.80:8765
+2025-06-28 16:55:39,010 - core.job_scheduler - INFO - Démarrage du planificateur de jobs...
+2025-06-28 16:55:39,296 - gui.main_window - INFO - ✅ Interface adaptative initialisée - Type de média: video
+2025-06-28 16:55:39,297 - gui.main_window - INFO - 🎯 Interface utilisateur entièrement initialisée
+2025-06-28 16:55:39,774 - core.distributed_client - INFO - Connecté au serveur: ws://192.168.1.80:8765. Envoi du message HELLO.
+2025-06-28 16:55:40,007 - core.distributed_client - INFO - Informations serveur reçues de ws://192.168.1.80:8765: ffmpeg1
+2025-06-28 17:06:23,025 - core.hardware_detector - INFO - 🔍 Détection des capacités du serveur...
+2025-06-28 17:06:26,047 - core.hardware_detector - INFO - ✅ Capacités détectées: 11 logiciels, 0 matériels
+2025-06-28 17:06:26,048 - core.local_server - INFO - 🔧 Serveur local initialisé avec 11 encodeurs
+2025-06-28 17:06:26,057 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 17:06:26,153 - gui.main_window - WARNING - ⚠️ TkinterDnD2 non disponible - drag and drop désactivé
+2025-06-28 17:06:26,154 - core.server_discovery - INFO - Démarrage de la découverte des serveurs...
+2025-06-28 17:06:26,154 - core.distributed_client - INFO - Tentative de connexion au serveur: ws://192.168.1.80:8765
+2025-06-28 17:06:26,157 - core.job_scheduler - INFO - Démarrage du planificateur de jobs...
+2025-06-28 17:06:26,408 - gui.main_window - INFO - ✅ Interface adaptative initialisée - Type de média: video
+2025-06-28 17:06:26,408 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 17:06:26,410 - gui.main_window - INFO - 🎯 Interface utilisateur entièrement initialisée
+2025-06-28 17:06:26,893 - core.distributed_client - INFO - Connecté au serveur: ws://192.168.1.80:8765. Envoi du message HELLO.
+2025-06-28 17:06:27,020 - core.distributed_client - INFO - Informations serveur reçues de ws://192.168.1.80:8765: ffmpeg1
+2025-06-28 17:07:01,886 - core.hardware_detector - INFO - 🔍 Détection des capacités du serveur...
+2025-06-28 17:09:31,601 - core.hardware_detector - INFO - 🔍 Détection des capacités du serveur...
+2025-06-28 17:09:34,700 - core.hardware_detector - INFO - ✅ Capacités détectées: 11 logiciels, 0 matériels
+2025-06-28 17:09:34,700 - core.local_server - INFO - 🔧 Serveur local initialisé avec 11 encodeurs
+2025-06-28 17:09:34,710 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 17:09:34,808 - gui.main_window - WARNING - ⚠️ TkinterDnD2 non disponible - drag and drop désactivé
+2025-06-28 17:09:34,808 - core.server_discovery - INFO - Démarrage de la découverte des serveurs...
+2025-06-28 17:09:34,808 - core.distributed_client - INFO - Tentative de connexion au serveur: ws://192.168.1.80:8765
+2025-06-28 17:09:34,812 - core.job_scheduler - INFO - Démarrage du planificateur de jobs...
+2025-06-28 17:09:35,023 - gui.main_window - INFO - ✅ Interface adaptative initialisée - Type de média: video
+2025-06-28 17:09:35,023 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 17:09:35,025 - gui.main_window - INFO - 🎯 Interface utilisateur entièrement initialisée
+2025-06-28 17:09:35,497 - core.distributed_client - INFO - Connecté au serveur: ws://192.168.1.80:8765. Envoi du message HELLO.
+2025-06-28 17:09:35,693 - core.distributed_client - INFO - Informations serveur reçues de ws://192.168.1.80:8765: ffmpeg1
+2025-06-28 17:09:39,059 - core.app_controller - INFO - Type de média global changé pour: video
