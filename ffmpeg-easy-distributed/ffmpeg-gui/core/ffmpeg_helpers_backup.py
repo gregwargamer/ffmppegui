@@ -17,11 +17,11 @@ class FFmpegHelpers:
                 result = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True, check=True)
                 encoders = []
                 codec_pattern = re.compile(r'\(codec (\w+)\)')
-                encoder_line_re = re.compile(r"^\s([VAS])([.FSXBD]{5})\s+(\w+)\s+(.*)$")
+                encoder_line_re = re.compile(r"^\s([VAS])\.\.\.\.D\s+(\w+)\s+(.*)$")
                 for line in result.stdout.splitlines():
                     match = encoder_line_re.match(line)
                     if match:
-                        type_flag, flags, encoder_name, description = match.groups()
+                        type_flag, encoder_name, description = match.groups()
                         
                         match = codec_pattern.search(description)
                         implemented_codec = match.group(1) if match else None
@@ -121,9 +121,9 @@ class FFmpegHelpers:
                 cls._codecs_cache = {
                     "video": sorted(list(video)) or ["h264", "hevc", "vp9", "av1", "mpeg4"],
                     "audio": sorted(list(audio)) or ["aac", "mp3", "opus", "flac"],
-                    "image": ["webp", "png", "jpeg", "avif", "jpegxl", "heic"] + sorted([x for x in list(image) if x not in ["webp", "png", "jpeg", "avif", "jpegxl", "heic"]]) or ["webp", "png", "jpeg", "bmp", "jpegxl", "heic"]
+                    "image": sorted(list(image)) or ["webp", "png", "jpeg", "bmp", "jpegxl", "heic"]
                 }
             except (FileNotFoundError, subprocess.CalledProcessError) as e:
                 messagebox.showerror("Erreur FFmpeg", f"Impossible de lister les codecs: {e}")
                 cls._codecs_cache = {"video": [], "audio": [], "image": []}
-        return cls._codecs_cache 
+        return cls._codecs_cache

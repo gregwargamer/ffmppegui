@@ -225,9 +225,26 @@ show_completion_message() {
     echo -e "You can now run the application by typing: ${GREEN}$LAUNCHER_NAME${NC}"
     if [[ ":$PATH:" != *":$LAUNCHER_DIR:"* ]]; then
         print_warning "Your PATH does not seem to include $LAUNCHER_DIR."
-        print_warning "Please add it to your PATH. For zsh (default on modern macOS), you can run:"
-        echo -e "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc"
-        print_warning "Afterward, restart your terminal session or run 'source ~/.zshrc'."
+        print_warning "Attempting to add it to your ~/.zshrc file..."
+        
+        # Add export to .zshrc if not already there
+        ZSHRC_PATH="$HOME/.zshrc"
+        EXPORT_LINE="export PATH=\"\$HOME/.local/bin:\$PATH\""
+        
+        if [ -f "$ZSHRC_PATH" ]; then
+            if ! grep -q "export PATH=\"\$HOME/.local/bin:\$PATH\"" "$ZSHRC_PATH" && ! grep -q "export PATH=\"$LAUNCHER_DIR:\$PATH\"" "$ZSHRC_PATH"; then
+                echo -e "\n# Add FFmpeg Easy GUI launcher to PATH\n$EXPORT_LINE" >> "$ZSHRC_PATH"
+                print_info "Successfully added PATH to $ZSHRC_PATH."
+                print_warning "Please restart your terminal session or run 'source ~/.zshrc' to apply changes."
+            else
+                print_info "$LAUNCHER_DIR is already in your PATH in $ZSHRC_PATH."
+            fi
+        else
+            echo -e "\n# Add FFmpeg Easy GUI launcher to PATH\n$EXPORT_LINE" > "$ZSHRC_PATH"
+            print_info "Created $ZSHRC_PATH and added PATH."
+            print_warning "Please restart your terminal session or run 'source ~/.zshrc' to apply changes."
+        fi
+        
         echo -e "Alternatively, run with the full path:"
         echo -e "  ${GREEN}$LAUNCHER_DIR/$LAUNCHER_NAME${NC}"
     fi

@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field, asdict
 import json
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 @dataclass
 class FilenameTemplate:
@@ -18,6 +18,7 @@ class UISettings:
     show_server_details: bool = True
     auto_select_best_server: bool = True
     progress_refresh_interval: int = 2
+    default_resolution: Optional[str] = None
 
 @dataclass
 class DistributedSettings:

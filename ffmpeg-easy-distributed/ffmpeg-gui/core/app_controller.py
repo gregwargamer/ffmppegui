@@ -161,6 +161,8 @@ class AppController:
 
         if current_global_type != media_type:
             self.logger.info(f"Type de média global changé pour: {media_type}")
+            # Forcer la notification pour que l'UI se mette à jour
+            self.state.notify_observers("global_media_type_changed")
 
     def duplicate_job(self, job_id: str) -> Optional[EncodeJob]:
         """Duplique un job existant"""

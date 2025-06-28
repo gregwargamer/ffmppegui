@@ -1,0 +1,340 @@
+2025-06-28 18:05:02,233 - core.hardware_detector - INFO - 🔍 Détection des capacités du serveur...
+2025-06-28 18:05:05,220 - core.hardware_detector - INFO - ✅ Capacités détectées: 11 logiciels, 0 matériels
+2025-06-28 18:05:05,220 - core.local_server - INFO - 🔧 Serveur local initialisé avec 11 encodeurs
+2025-06-28 18:05:05,231 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 18:05:05,280 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'codec': 'h264'}
+2025-06-28 18:05:05,280 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'mp4'}
+2025-06-28 18:05:05,281 - gui.main_window - WARNING - ⚠️ TkinterDnD2 non disponible - drag and drop désactivé
+2025-06-28 18:05:05,281 - core.server_discovery - INFO - Démarrage de la découverte des serveurs...
+2025-06-28 18:05:05,282 - core.job_scheduler - INFO - Démarrage du planificateur de jobs...
+2025-06-28 18:05:05,499 - gui.main_window - INFO - ✅ Interface adaptative initialisée - Type de média: video
+2025-06-28 18:05:05,499 - gui.main_window - INFO - Updating UI. Media Type: video, Job Config: None, Global Context: True
+2025-06-28 18:05:05,499 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 18:05:05,499 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 18:05:05,499 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '22'}
+2025-06-28 18:05:05,499 - gui.main_window - INFO - 🎯 Interface utilisateur entièrement initialisée
+2025-06-28 18:06:01,033 - gui.main_window - INFO - Global media type dropdown changed by user to: image
+2025-06-28 18:06:01,033 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'mp4'}
+2025-06-28 18:06:01,033 - core.app_controller - INFO - Type de média global changé pour: image
+2025-06-28 18:06:01,033 - gui.main_window - INFO - Updating UI. Media Type: image, Job Config: None, Global Context: True
+2025-06-28 18:06:01,033 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'quality': '85'}
+2025-06-28 18:06:01,034 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': 'medium'}
+2025-06-28 18:06:01,034 - gui.main_window - INFO - 🎯 Adaptation interface pour type: image
+2025-06-28 18:06:01,034 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'codec': 'avif'}
+2025-06-28 18:06:01,034 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'avif'}
+2025-06-28 18:06:01,034 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 18:06:01,034 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '85'}
+2025-06-28 18:06:13,069 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 18:06:13,069 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '85'}
+2025-06-28 18:07:52,760 - core.hardware_detector - INFO - 🔍 Détection des capacités du serveur...
+2025-06-28 18:07:55,785 - core.hardware_detector - INFO - ✅ Capacités détectées: 11 logiciels, 0 matériels
+2025-06-28 18:07:55,785 - core.local_server - INFO - 🔧 Serveur local initialisé avec 11 encodeurs
+2025-06-28 18:07:55,800 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 18:07:55,851 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'codec': 'h264'}
+2025-06-28 18:07:55,851 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'mp4'}
+2025-06-28 18:07:55,853 - gui.main_window - WARNING - ⚠️ TkinterDnD2 non disponible - drag and drop désactivé
+2025-06-28 18:07:55,853 - core.server_discovery - INFO - Démarrage de la découverte des serveurs...
+2025-06-28 18:07:55,853 - core.job_scheduler - INFO - Démarrage du planificateur de jobs...
+2025-06-28 18:07:56,083 - gui.main_window - INFO - ✅ Interface adaptative initialisée - Type de média: video
+2025-06-28 18:07:56,083 - gui.main_window - INFO - Updating UI. Media Type: video, Job Config: None, Global Context: True
+2025-06-28 18:07:56,084 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 18:07:56,084 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 18:07:56,084 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '22'}
+2025-06-28 18:07:56,084 - gui.main_window - INFO - 🎯 Interface utilisateur entièrement initialisée
+2025-06-28 18:12:04,860 - core.hardware_detector - INFO - 🔍 Détection des capacités du serveur...
+2025-06-28 18:12:07,891 - core.hardware_detector - INFO - ✅ Capacités détectées: 11 logiciels, 0 matériels
+2025-06-28 18:12:07,891 - core.local_server - INFO - 🔧 Serveur local initialisé avec 11 encodeurs
+2025-06-28 18:12:07,901 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 18:12:07,956 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'codec': 'h264'}
+2025-06-28 18:12:07,956 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'mp4'}
+2025-06-28 18:12:07,957 - gui.main_window - WARNING - ⚠️ TkinterDnD2 non disponible - drag and drop désactivé
+2025-06-28 18:12:07,958 - core.server_discovery - INFO - Démarrage de la découverte des serveurs...
+2025-06-28 18:12:07,958 - core.job_scheduler - INFO - Démarrage du planificateur de jobs...
+2025-06-28 18:12:08,193 - gui.main_window - INFO - ✅ Interface adaptative initialisée - Type de média: video
+2025-06-28 18:12:08,193 - gui.main_window - INFO - Updating UI. Media Type: video, Job Config: None, Global Context: True
+2025-06-28 18:12:08,193 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 18:12:08,194 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 18:12:08,194 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '22'}
+2025-06-28 18:12:08,194 - gui.main_window - INFO - 🎯 Interface utilisateur entièrement initialisée
+2025-06-28 18:20:35,371 - core.hardware_detector - INFO - 🔍 Détection des capacités du serveur...
+2025-06-28 18:20:38,416 - core.hardware_detector - INFO - ✅ Capacités détectées: 11 logiciels, 0 matériels
+2025-06-28 18:20:38,416 - core.local_server - INFO - 🔧 Serveur local initialisé avec 11 encodeurs
+2025-06-28 18:20:38,428 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 18:20:38,485 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'codec': 'h264'}
+2025-06-28 18:20:38,486 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'mp4'}
+2025-06-28 18:20:38,487 - gui.main_window - WARNING - ⚠️ TkinterDnD2 non disponible - drag and drop désactivé
+2025-06-28 18:20:38,487 - core.server_discovery - INFO - Démarrage de la découverte des serveurs...
+2025-06-28 18:20:38,487 - core.job_scheduler - INFO - Démarrage du planificateur de jobs...
+2025-06-28 18:20:38,739 - gui.main_window - INFO - ✅ Interface adaptative initialisée - Type de média: video
+2025-06-28 18:20:38,739 - gui.main_window - INFO - Updating UI. Media Type: video, Job Config: None, Global Context: True
+2025-06-28 18:20:38,740 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 18:20:38,740 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 18:20:38,740 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '22'}
+2025-06-28 18:20:38,740 - gui.main_window - INFO - 🎯 Interface utilisateur entièrement initialisée
+2025-06-28 18:22:45,042 - gui.main_window - INFO - Global media type dropdown changed by user to: audio
+2025-06-28 18:22:45,043 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'mp4'}
+2025-06-28 18:22:45,043 - core.app_controller - INFO - Type de média global changé pour: audio
+2025-06-28 18:22:45,043 - gui.main_window - INFO - Updating UI. Media Type: audio, Job Config: None, Global Context: True
+2025-06-28 18:22:45,043 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'quality': ''}
+2025-06-28 18:22:45,043 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': 'medium'}
+2025-06-28 18:22:45,043 - gui.main_window - INFO - 🎯 Adaptation interface pour type: audio
+2025-06-28 18:22:45,043 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'codec': 'aac'}
+2025-06-28 18:22:45,043 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'm4a'}
+2025-06-28 18:22:45,043 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 18:22:48,292 - gui.main_window - INFO - Global media type dropdown changed by user to: image
+2025-06-28 18:22:48,293 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'm4a'}
+2025-06-28 18:22:48,293 - core.app_controller - INFO - Type de média global changé pour: image
+2025-06-28 18:22:48,293 - gui.main_window - INFO - Updating UI. Media Type: image, Job Config: None, Global Context: True
+2025-06-28 18:22:48,293 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'quality': '85'}
+2025-06-28 18:22:48,293 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': 'medium'}
+2025-06-28 18:22:48,293 - gui.main_window - INFO - 🎯 Adaptation interface pour type: image
+2025-06-28 18:22:48,294 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'codec': 'avif'}
+2025-06-28 18:22:48,294 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'avif'}
+2025-06-28 18:22:48,294 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 18:22:48,294 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '85'}
+2025-06-28 18:22:55,568 - core.app_controller - INFO - Job ajouté: oh.webp (image)
+2025-06-28 18:22:55,568 - core.app_controller - INFO - Job ajouté: séduction.png (image)
+2025-06-28 18:22:55,568 - core.app_controller - INFO - Job ajouté: lionnealaffut.png (image)
+2025-06-28 18:22:55,568 - core.app_controller - INFO - Job ajouté: calin.png (image)
+2025-06-28 18:22:55,568 - core.app_controller - INFO - Job ajouté: rixedegnous.png (image)
+2025-06-28 18:22:55,568 - core.app_controller - INFO - Job ajouté: tatanka.png (image)
+2025-06-28 18:22:55,569 - core.app_controller - INFO - Job ajouté: leclan1.png (image)
+2025-06-28 18:22:55,569 - core.app_controller - INFO - Job ajouté: harpie.png (image)
+2025-06-28 18:22:55,569 - core.app_controller - INFO - Job ajouté: titus.png (image)
+2025-06-28 18:22:55,569 - core.app_controller - INFO - Job ajouté: appelduloup.png (image)
+2025-06-28 18:22:55,569 - core.app_controller - INFO - Job ajouté: punia.png (image)
+2025-06-28 18:22:55,569 - core.app_controller - INFO - Job ajouté: arak.png (image)
+2025-06-28 18:22:55,569 - core.app_controller - INFO - Job ajouté: curieuse.png (image)
+2025-06-28 18:22:55,569 - core.app_controller - INFO - Job ajouté: oursonfatigué.png (image)
+2025-06-28 18:22:55,570 - core.app_controller - INFO - Job ajouté: sursaut.png (image)
+2025-06-28 18:22:55,570 - core.app_controller - INFO - Job ajouté: guepardcobra.png (image)
+2025-06-28 18:22:55,570 - core.app_controller - INFO - Job ajouté: reveil.png (image)
+2025-06-28 18:22:55,570 - core.app_controller - INFO - Job ajouté: feulement2.webp (image)
+2025-06-28 18:22:55,571 - core.app_controller - INFO - Job ajouté: rajah.png (image)
+2025-06-28 18:22:55,571 - core.app_controller - INFO - Job ajouté:  3loupsenchasse.png (image)
+2025-06-28 18:22:55,571 - core.app_controller - INFO - Job ajouté: lepine.png (image)
+2025-06-28 18:22:55,571 - core.app_controller - INFO - Job ajouté: courir.png (image)
+2025-06-28 18:22:55,571 - core.app_controller - INFO - Job ajouté: naissancedimpala.png (image)
+2025-06-28 18:22:55,572 - core.app_controller - INFO - Job ajouté: supplique.png (image)
+2025-06-28 18:22:55,572 - core.app_controller - INFO - Job ajouté: matou.png (image)
+2025-06-28 18:22:55,572 - core.app_controller - INFO - Job ajouté: pomponette.png (image)
+2025-06-28 18:22:55,572 - core.app_controller - INFO - Job ajouté: louveteauperdu.png (image)
+2025-06-28 18:22:55,573 - core.app_controller - INFO - Job ajouté: lapindegarenne.png (image)
+2025-06-28 18:22:55,573 - core.app_controller - INFO - Job ajouté: ruade.png (image)
+2025-06-28 18:22:55,573 - core.app_controller - INFO - Job ajouté: lèvetoi.png (image)
+2025-06-28 18:22:55,573 - core.app_controller - INFO - Job ajouté: wimba.png (image)
+2025-06-28 18:22:55,574 - core.app_controller - INFO - Job ajouté: lycaon.png (image)
+2025-06-28 18:22:55,574 - core.app_controller - INFO - Job ajouté: bouba.png (image)
+2025-06-28 18:22:55,574 - core.app_controller - INFO - Job ajouté: solitaire.png (image)
+2025-06-28 18:22:55,574 - core.app_controller - INFO - Job ajouté: guepardeau.png (image)
+2025-06-28 18:22:55,575 - core.app_controller - INFO - Job ajouté: lionneaffamé.png (image)
+2025-06-28 18:22:55,575 - core.app_controller - INFO - Job ajouté: hyenevautour.png (image)
+2025-06-28 18:22:55,575 - core.app_controller - INFO - Job ajouté: 3impalas.png (image)
+2025-06-28 18:22:55,576 - core.app_controller - INFO - Job ajouté: plongeon.png (image)
+2025-06-28 18:22:55,576 - core.app_controller - INFO - Job ajouté: menace.png (image)
+2025-06-28 18:22:55,576 - core.app_controller - INFO - Job ajouté: reste.png (image)
+2025-06-28 18:22:55,577 - core.app_controller - INFO - Job ajouté: leguet.png (image)
+2025-06-28 18:22:55,577 - core.app_controller - INFO - Job ajouté: puce.png (image)
+2025-06-28 18:22:55,577 - core.app_controller - INFO - Job ajouté: 2louvards.png (image)
+2025-06-28 18:22:55,578 - core.app_controller - INFO - Job ajouté: lionagressif.png (image)
+2025-06-28 18:22:55,578 - core.app_controller - INFO - Job ajouté: lenvol.png (image)
+2025-06-28 18:22:55,579 - core.app_controller - INFO - Job ajouté: lepiege.png (image)
+2025-06-28 18:22:55,579 - core.app_controller - INFO - Job ajouté: détermination.png (image)
+2025-06-28 18:22:55,580 - core.app_controller - INFO - Job ajouté: serengeti.png (image)
+2025-06-28 18:22:55,580 - core.app_controller - INFO - Job ajouté: amarok.png (image)
+2025-06-28 18:22:55,580 - core.app_controller - INFO - Job ajouté: raid.png (image)
+2025-06-28 18:22:55,581 - core.app_controller - INFO - Job ajouté: chahut.png (image)
+2025-06-28 18:22:55,581 - core.app_controller - INFO - Job ajouté: okavango.png (image)
+2025-06-28 18:22:55,581 - core.app_controller - INFO - Job ajouté:  leguerrier.png (image)
+2025-06-28 18:22:55,582 - core.app_controller - INFO - Job ajouté: poursuite.png (image)
+2025-06-28 18:22:55,582 - core.app_controller - INFO - Job ajouté: lionnecombattant.png (image)
+2025-06-28 18:22:55,583 - core.app_controller - INFO - Job ajouté: vengeance.png (image)
+2025-06-28 18:22:55,583 - core.app_controller - INFO - Job ajouté: lionnedéfensive.png (image)
+2025-06-28 18:22:55,584 - core.app_controller - INFO - Job ajouté: lafuite.png (image)
+2025-06-28 18:22:55,584 - core.app_controller - INFO - Job ajouté: assaut.png (image)
+2025-06-28 18:22:55,584 - core.app_controller - INFO - Job ajouté: agressiondeguepard.png (image)
+2025-06-28 18:22:55,585 - core.app_controller - INFO - Job ajouté: monarbre.png (image)
+2025-06-28 18:22:55,585 - core.app_controller - INFO - Job ajouté: approche.png (image)
+2025-06-28 18:22:55,586 - core.app_controller - INFO - Job ajouté: oursepetit.png (image)
+2025-06-28 18:22:55,586 - core.app_controller - INFO - Job ajouté: panique.png (image)
+2025-06-28 18:22:55,587 - core.app_controller - INFO - Job ajouté: tendresse.png (image)
+2025-06-28 18:22:55,587 - core.app_controller - INFO - Job ajouté: offensivedelion.png (image)
+2025-06-28 18:22:55,588 - core.app_controller - INFO - Job ajouté: lacourseduguépard.png (image)
+2025-06-28 18:22:55,588 - core.app_controller - INFO - Job ajouté: chasseauximpalas.png (image)
+2025-06-28 18:22:55,589 - core.app_controller - INFO - Job ajouté: combatdetitans.png (image)
+2025-06-28 18:22:55,590 - core.app_controller - INFO - Job ajouté: soifdetigre.webp (image)
+2025-06-28 18:22:55,590 - core.app_controller - INFO - Job ajouté: survivre.png (image)
+2025-06-28 18:22:55,591 - core.app_controller - INFO - Job ajouté: instinctsdesurvie.png (image)
+2025-06-28 18:22:55,591 - core.app_controller - INFO - Job ajouté: ouste.png (image)
+2025-06-28 18:22:55,592 - core.app_controller - INFO - Job ajouté: querelle.png (image)
+2025-06-28 18:22:55,592 - core.app_controller - INFO - Job ajouté: attaq_guep avec arrière-plan supprimé.png (image)
+2025-06-28 18:22:55,593 - core.app_controller - INFO - Job ajouté: lechoc.png (image)
+2025-06-28 18:22:55,593 - core.app_controller - INFO - Job ajouté: reprisedelachasse.png (image)
+2025-06-28 18:22:55,593 - gui.main_window - INFO - ✅ 78 fichiers ajoutés
+2025-06-28 18:23:17,743 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 18:23:17,744 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '85'}
+2025-06-28 18:23:30,775 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 18:23:30,777 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '85'}
+2025-06-28 18:23:36,458 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 18:23:36,458 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '85'}
+2025-06-28 18:23:39,474 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 18:23:39,476 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '85'}
+2025-06-28 18:23:46,492 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 18:23:46,493 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '85'}
+2025-06-28 18:24:19,829 - core.hardware_detector - INFO - 🔍 Détection des capacités du serveur...
+2025-06-28 18:24:22,820 - core.hardware_detector - INFO - ✅ Capacités détectées: 11 logiciels, 0 matériels
+2025-06-28 18:24:22,820 - core.local_server - INFO - 🔧 Serveur local initialisé avec 11 encodeurs
+2025-06-28 18:24:22,829 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 18:24:22,880 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'codec': 'h264'}
+2025-06-28 18:24:22,880 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'mp4'}
+2025-06-28 18:24:22,882 - gui.main_window - WARNING - ⚠️ TkinterDnD2 non disponible - drag and drop désactivé
+2025-06-28 18:24:22,882 - core.server_discovery - INFO - Démarrage de la découverte des serveurs...
+2025-06-28 18:24:22,882 - core.job_scheduler - INFO - Démarrage du planificateur de jobs...
+2025-06-28 18:24:23,136 - gui.main_window - INFO - ✅ Interface adaptative initialisée - Type de média: video
+2025-06-28 18:24:23,136 - gui.main_window - INFO - Updating UI. Media Type: video, Job Config: None, Global Context: True
+2025-06-28 18:24:23,136 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 18:24:23,136 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 18:24:23,136 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '22'}
+2025-06-28 18:24:23,136 - gui.main_window - INFO - 🎯 Interface utilisateur entièrement initialisée
+2025-06-28 18:25:54,132 - core.hardware_detector - INFO - 🔍 Détection des capacités du serveur...
+2025-06-28 18:25:57,051 - core.hardware_detector - INFO - ✅ Capacités détectées: 11 logiciels, 0 matériels
+2025-06-28 18:25:57,051 - core.local_server - INFO - 🔧 Serveur local initialisé avec 11 encodeurs
+2025-06-28 18:25:57,060 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 18:25:57,118 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'codec': 'h264'}
+2025-06-28 18:25:57,118 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'mp4'}
+2025-06-28 18:25:57,119 - gui.main_window - WARNING - ⚠️ TkinterDnD2 non disponible - drag and drop désactivé
+2025-06-28 18:25:57,119 - core.server_discovery - INFO - Démarrage de la découverte des serveurs...
+2025-06-28 18:25:57,119 - core.job_scheduler - INFO - Démarrage du planificateur de jobs...
+2025-06-28 18:25:57,377 - gui.main_window - INFO - ✅ Interface adaptative initialisée - Type de média: video
+2025-06-28 18:25:57,377 - gui.main_window - INFO - Updating UI. Media Type: video, Job Config: None, Global Context: True
+2025-06-28 18:25:57,377 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 18:25:57,377 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 18:25:57,378 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '22'}
+2025-06-28 18:25:57,378 - gui.main_window - INFO - 🎯 Interface utilisateur entièrement initialisée
+2025-06-28 18:27:33,530 - gui.main_window - INFO - Global media type dropdown changed by user to: image
+2025-06-28 18:27:33,531 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'mp4'}
+2025-06-28 18:27:33,531 - core.app_controller - INFO - Type de média global changé pour: image
+2025-06-28 18:27:33,532 - gui.main_window - INFO - Updating UI. Media Type: image, Job Config: None, Global Context: True
+2025-06-28 18:27:33,532 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'quality': '85'}
+2025-06-28 18:27:33,532 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': 'medium'}
+2025-06-28 18:27:33,532 - gui.main_window - INFO - 🎯 Adaptation interface pour type: image
+2025-06-28 18:27:33,532 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'codec': 'avif'}
+2025-06-28 18:27:33,532 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'avif'}
+2025-06-28 18:27:33,532 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 18:27:33,533 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '85'}
+2025-06-28 18:27:41,530 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 18:27:41,530 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '85'}
+2025-06-28 18:58:47,589 - core.hardware_detector - INFO - 🔍 Détection des capacités du serveur...
+2025-06-28 18:58:50,581 - core.hardware_detector - INFO - ✅ Capacités détectées: 11 logiciels, 0 matériels
+2025-06-28 18:58:50,581 - core.local_server - INFO - 🔧 Serveur local initialisé avec 11 encodeurs
+2025-06-28 18:58:50,592 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 18:58:50,646 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'codec': 'h264'}
+2025-06-28 18:58:50,646 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'mp4'}
+2025-06-28 18:58:50,648 - gui.main_window - WARNING - ⚠️ TkinterDnD2 non disponible - drag and drop désactivé
+2025-06-28 18:58:50,648 - core.server_discovery - INFO - Démarrage de la découverte des serveurs...
+2025-06-28 18:58:50,648 - core.job_scheduler - INFO - Démarrage du planificateur de jobs...
+2025-06-28 18:58:50,869 - gui.main_window - INFO - ✅ Interface adaptative initialisée - Type de média: video
+2025-06-28 18:58:50,869 - gui.main_window - INFO - Updating UI. Media Type: video, Job Config: None, Global Context: True
+2025-06-28 18:58:50,870 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 18:58:50,870 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 18:58:50,870 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '22'}
+2025-06-28 18:58:50,870 - gui.main_window - INFO - 🎯 Interface utilisateur entièrement initialisée
+2025-06-28 19:03:29,388 - gui.main_window - INFO - Global media type dropdown changed by user to: image
+2025-06-28 19:03:29,389 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'mp4'}
+2025-06-28 19:03:29,390 - core.app_controller - INFO - Type de média global changé pour: image
+2025-06-28 19:03:29,390 - gui.main_window - INFO - Updating UI. Media Type: image, Job Config: None, Global Context: True
+2025-06-28 19:03:29,390 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'quality': '85'}
+2025-06-28 19:03:29,390 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': 'medium'}
+2025-06-28 19:03:29,390 - gui.main_window - INFO - 🎯 Adaptation interface pour type: image
+2025-06-28 19:03:29,390 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'codec': 'avif'}
+2025-06-28 19:03:29,390 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'avif'}
+2025-06-28 19:03:29,390 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 19:03:29,391 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '85'}
+2025-06-28 19:03:42,204 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 19:03:42,205 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '85'}
+2025-06-28 19:07:37,151 - core.hardware_detector - INFO - 🔍 Détection des capacités du serveur...
+2025-06-28 19:07:40,150 - core.hardware_detector - INFO - ✅ Capacités détectées: 11 logiciels, 0 matériels
+2025-06-28 19:07:40,150 - core.local_server - INFO - 🔧 Serveur local initialisé avec 11 encodeurs
+2025-06-28 19:07:40,159 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 19:07:40,207 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'codec': 'h264'}
+2025-06-28 19:07:40,207 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'mp4'}
+2025-06-28 19:07:40,208 - gui.main_window - WARNING - ⚠️ TkinterDnD2 non disponible - drag and drop désactivé
+2025-06-28 19:07:40,208 - core.server_discovery - INFO - Démarrage de la découverte des serveurs...
+2025-06-28 19:07:40,208 - core.job_scheduler - INFO - Démarrage du planificateur de jobs...
+2025-06-28 19:07:40,419 - gui.main_window - INFO - ✅ Interface adaptative initialisée - Type de média: video
+2025-06-28 19:07:40,419 - gui.main_window - INFO - Updating UI. Media Type: video, Job Config: None, Global Context: True
+2025-06-28 19:07:40,419 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 19:07:40,420 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 19:07:40,420 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '22'}
+2025-06-28 19:07:40,420 - gui.main_window - INFO - 🎯 Interface utilisateur entièrement initialisée
+2025-06-28 19:11:24,956 - gui.main_window - INFO - Global media type dropdown changed by user to: image
+2025-06-28 19:11:25,402 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'mp4'}
+2025-06-28 19:11:25,403 - core.app_controller - INFO - Type de média global changé pour: image
+2025-06-28 19:11:25,404 - gui.main_window - INFO - Updating UI. Media Type: image, Job Config: None, Global Context: True
+2025-06-28 19:11:25,404 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'quality': '85'}
+2025-06-28 19:11:25,404 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': 'medium'}
+2025-06-28 19:11:25,404 - gui.main_window - INFO - 🎯 Adaptation interface pour type: image
+2025-06-28 19:11:25,405 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'codec': 'avif'}
+2025-06-28 19:11:25,405 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'avif'}
+2025-06-28 19:11:25,405 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 19:11:25,410 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '85'}
+2025-06-28 19:11:39,551 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 19:11:39,551 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '85'}
+2025-06-28 19:15:59,227 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 19:15:59,229 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '85'}
+2025-06-28 19:21:49,223 - core.hardware_detector - INFO - 🔍 Détection des capacités du serveur...
+2025-06-28 19:21:52,285 - core.hardware_detector - INFO - ✅ Capacités détectées: 11 logiciels, 0 matériels
+2025-06-28 19:21:52,285 - core.local_server - INFO - 🔧 Serveur local initialisé avec 11 encodeurs
+2025-06-28 19:21:52,296 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 19:21:52,348 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'codec': 'h264'}
+2025-06-28 19:21:52,348 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'mp4'}
+2025-06-28 19:21:52,350 - gui.main_window - WARNING - ⚠️ TkinterDnD2 non disponible - drag and drop désactivé
+2025-06-28 19:21:52,350 - core.server_discovery - INFO - Démarrage de la découverte des serveurs...
+2025-06-28 19:21:52,350 - core.job_scheduler - INFO - Démarrage du planificateur de jobs...
+2025-06-28 19:21:52,551 - gui.main_window - INFO - ✅ Interface adaptative initialisée - Type de média: video
+2025-06-28 19:21:52,551 - gui.main_window - INFO - Updating UI. Media Type: video, Job Config: None, Global Context: True
+2025-06-28 19:21:52,551 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 19:21:52,551 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 19:21:52,551 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '22'}
+2025-06-28 19:21:52,551 - gui.main_window - INFO - 🎯 Interface utilisateur entièrement initialisée
+2025-06-28 19:22:01,083 - gui.main_window - INFO - Global media type dropdown changed by user to: image
+2025-06-28 19:22:01,083 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'mp4'}
+2025-06-28 19:22:01,083 - core.app_controller - INFO - Type de média global changé pour: image
+2025-06-28 19:22:01,083 - gui.main_window - INFO - Updating UI. Media Type: image, Job Config: None, Global Context: True
+2025-06-28 19:22:01,084 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'quality': '85'}
+2025-06-28 19:22:01,084 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': 'medium'}
+2025-06-28 19:22:01,084 - gui.main_window - INFO - 🎯 Adaptation interface pour type: image
+2025-06-28 19:22:01,084 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'codec': 'webp'}
+2025-06-28 19:22:01,085 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'webp'}
+2025-06-28 19:22:01,085 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 19:22:01,085 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '85'}
+2025-06-28 19:22:08,610 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 19:22:08,611 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '85'}
+2025-06-28 19:23:53,551 - core.hardware_detector - INFO - 🔍 Détection des capacités du serveur...
+2025-06-28 19:23:56,650 - core.hardware_detector - INFO - ✅ Capacités détectées: 11 logiciels, 0 matériels
+2025-06-28 19:23:56,650 - core.local_server - INFO - 🔧 Serveur local initialisé avec 11 encodeurs
+2025-06-28 19:23:56,659 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 19:23:56,709 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'codec': 'h264'}
+2025-06-28 19:23:56,709 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'mp4'}
+2025-06-28 19:23:56,711 - gui.main_window - WARNING - ⚠️ TkinterDnD2 non disponible - drag and drop désactivé
+2025-06-28 19:23:56,711 - core.server_discovery - INFO - Démarrage de la découverte des serveurs...
+2025-06-28 19:23:56,711 - core.job_scheduler - INFO - Démarrage du planificateur de jobs...
+2025-06-28 19:23:56,936 - gui.main_window - INFO - ✅ Interface adaptative initialisée - Type de média: video
+2025-06-28 19:23:56,936 - gui.main_window - INFO - Updating UI. Media Type: video, Job Config: None, Global Context: True
+2025-06-28 19:23:56,936 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 19:23:56,936 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 19:23:56,936 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '22'}
+2025-06-28 19:23:56,936 - gui.main_window - INFO - 🎯 Interface utilisateur entièrement initialisée
+2025-06-28 19:24:19,730 - gui.main_window - INFO - Global media type dropdown changed by user to: image
+2025-06-28 19:24:19,730 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'mp4'}
+2025-06-28 19:24:19,731 - core.app_controller - INFO - Type de média global changé pour: image
+2025-06-28 19:24:19,731 - gui.main_window - INFO - Updating UI. Media Type: image, Job Config: None, Global Context: True
+2025-06-28 19:24:19,731 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'quality': '85'}
+2025-06-28 19:24:19,731 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': 'medium'}
+2025-06-28 19:24:19,731 - gui.main_window - INFO - 🎯 Adaptation interface pour type: image
+2025-06-28 19:24:19,732 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'codec': 'webp'}
+2025-06-28 19:24:19,732 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'webp'}
+2025-06-28 19:24:19,732 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 19:24:19,732 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '85'}
+2025-06-28 19:24:24,661 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 19:24:24,661 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '85'}

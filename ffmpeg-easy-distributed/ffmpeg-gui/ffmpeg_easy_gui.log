@@ -223,3 +223,130 @@ AttributeError: 'MainWindow' object has no attribute 'tree'
 2025-06-28 17:09:35,497 - core.distributed_client - INFO - Connecté au serveur: ws://192.168.1.80:8765. Envoi du message HELLO.
 2025-06-28 17:09:35,693 - core.distributed_client - INFO - Informations serveur reçues de ws://192.168.1.80:8765: ffmpeg1
 2025-06-28 17:09:39,059 - core.app_controller - INFO - Type de média global changé pour: video
+2025-06-28 17:47:10,449 - core.hardware_detector - INFO - 🔍 Détection des capacités du serveur...
+2025-06-28 17:47:13,437 - core.hardware_detector - INFO - ✅ Capacités détectées: 11 logiciels, 0 matériels
+2025-06-28 17:47:13,437 - core.local_server - INFO - 🔧 Serveur local initialisé avec 11 encodeurs
+2025-06-28 17:47:13,447 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 17:47:13,500 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'codec': 'h264'}
+2025-06-28 17:47:13,500 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'mp4'}
+2025-06-28 17:47:13,501 - gui.main_window - WARNING - ⚠️ TkinterDnD2 non disponible - drag and drop désactivé
+2025-06-28 17:47:13,502 - core.server_discovery - INFO - Démarrage de la découverte des serveurs...
+2025-06-28 17:47:13,502 - core.distributed_client - INFO - Tentative de connexion au serveur: ws://192.168.1.80:8765
+2025-06-28 17:47:13,505 - core.job_scheduler - INFO - Démarrage du planificateur de jobs...
+2025-06-28 17:47:13,725 - gui.main_window - INFO - ✅ Interface adaptative initialisée - Type de média: video
+2025-06-28 17:47:13,725 - gui.main_window - INFO - Updating UI. Media Type: video, Job Config: None, Global Context: True
+2025-06-28 17:47:13,725 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 17:47:13,726 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 17:47:13,726 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '22'}
+2025-06-28 17:47:13,726 - gui.main_window - INFO - 🎯 Interface utilisateur entièrement initialisée
+2025-06-28 17:47:14,225 - core.distributed_client - INFO - Connecté au serveur: ws://192.168.1.80:8765. Envoi du message HELLO.
+2025-06-28 17:47:14,356 - core.distributed_client - INFO - Informations serveur reçues de ws://192.168.1.80:8765: ffmpeg1
+2025-06-28 17:47:44,133 - gui.main_window - INFO - Global media type dropdown changed by user to: video
+2025-06-28 17:47:44,133 - gui.main_window - INFO - Updating UI. Media Type: video, Job Config: None, Global Context: True
+2025-06-28 17:47:44,133 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': 'medium'}
+2025-06-28 17:47:44,133 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 17:47:44,134 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 17:47:44,134 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '22'}
+2025-06-28 17:49:27,208 - gui.main_window - INFO - Global media type dropdown changed by user to: video
+2025-06-28 17:49:27,208 - gui.main_window - INFO - Updating UI. Media Type: video, Job Config: None, Global Context: True
+2025-06-28 17:49:27,208 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': 'medium'}
+2025-06-28 17:49:27,209 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 17:49:27,209 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 17:49:27,209 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '22'}
+2025-06-28 17:49:29,135 - gui.main_window - INFO - Global media type dropdown changed by user to: video
+2025-06-28 17:49:29,135 - gui.main_window - INFO - Updating UI. Media Type: video, Job Config: None, Global Context: True
+2025-06-28 17:49:29,136 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': 'medium'}
+2025-06-28 17:49:29,136 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 17:49:29,136 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 17:49:29,137 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '22'}
+2025-06-28 17:49:32,016 - gui.main_window - INFO - Global media type dropdown changed by user to: video
+2025-06-28 17:49:32,016 - gui.main_window - INFO - Updating UI. Media Type: video, Job Config: None, Global Context: True
+2025-06-28 17:49:32,016 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': 'medium'}
+2025-06-28 17:49:32,016 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 17:49:32,017 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 17:49:32,017 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '22'}
+2025-06-28 17:49:40,496 - core.app_controller - INFO - Job ajouté: oh.webp (image)
+2025-06-28 17:49:40,496 - core.app_controller - INFO - Job ajouté: séduction.png (image)
+2025-06-28 17:49:40,496 - core.app_controller - INFO - Job ajouté: lionnealaffut.png (image)
+2025-06-28 17:49:40,496 - core.app_controller - INFO - Job ajouté: calin.png (image)
+2025-06-28 17:49:40,496 - core.app_controller - INFO - Job ajouté: rixedegnous.png (image)
+2025-06-28 17:49:40,496 - core.app_controller - INFO - Job ajouté: tatanka.png (image)
+2025-06-28 17:49:40,496 - core.app_controller - INFO - Job ajouté: leclan1.png (image)
+2025-06-28 17:49:40,497 - core.app_controller - INFO - Job ajouté: harpie.png (image)
+2025-06-28 17:49:40,497 - core.app_controller - INFO - Job ajouté: titus.png (image)
+2025-06-28 17:49:40,497 - core.app_controller - INFO - Job ajouté: appelduloup.png (image)
+2025-06-28 17:49:40,497 - core.app_controller - INFO - Job ajouté: punia.png (image)
+2025-06-28 17:49:40,497 - core.app_controller - INFO - Job ajouté: arak.png (image)
+2025-06-28 17:49:40,497 - core.app_controller - INFO - Job ajouté: curieuse.png (image)
+2025-06-28 17:49:40,498 - core.app_controller - INFO - Job ajouté: oursonfatigué.png (image)
+2025-06-28 17:49:40,498 - core.app_controller - INFO - Job ajouté: sursaut.png (image)
+2025-06-28 17:49:40,498 - core.app_controller - INFO - Job ajouté: guepardcobra.png (image)
+2025-06-28 17:49:40,498 - core.app_controller - INFO - Job ajouté: reveil.png (image)
+2025-06-28 17:49:40,499 - core.app_controller - INFO - Job ajouté: feulement2.webp (image)
+2025-06-28 17:49:40,499 - core.app_controller - INFO - Job ajouté: rajah.png (image)
+2025-06-28 17:49:40,499 - core.app_controller - INFO - Job ajouté:  3loupsenchasse.png (image)
+2025-06-28 17:49:40,499 - core.app_controller - INFO - Job ajouté: lepine.png (image)
+2025-06-28 17:49:40,499 - core.app_controller - INFO - Job ajouté: courir.png (image)
+2025-06-28 17:49:40,500 - core.app_controller - INFO - Job ajouté: naissancedimpala.png (image)
+2025-06-28 17:49:40,500 - core.app_controller - INFO - Job ajouté: supplique.png (image)
+2025-06-28 17:49:40,500 - core.app_controller - INFO - Job ajouté: matou.png (image)
+2025-06-28 17:49:40,501 - core.app_controller - INFO - Job ajouté: pomponette.png (image)
+2025-06-28 17:49:40,501 - core.app_controller - INFO - Job ajouté: louveteauperdu.png (image)
+2025-06-28 17:49:40,501 - core.app_controller - INFO - Job ajouté: lapindegarenne.png (image)
+2025-06-28 17:49:40,502 - core.app_controller - INFO - Job ajouté: ruade.png (image)
+2025-06-28 17:49:40,502 - core.app_controller - INFO - Job ajouté: lèvetoi.png (image)
+2025-06-28 17:49:40,502 - core.app_controller - INFO - Job ajouté: wimba.png (image)
+2025-06-28 17:49:40,503 - core.app_controller - INFO - Job ajouté: lycaon.png (image)
+2025-06-28 17:49:40,503 - core.app_controller - INFO - Job ajouté: bouba.png (image)
+2025-06-28 17:49:40,503 - core.app_controller - INFO - Job ajouté: solitaire.png (image)
+2025-06-28 17:49:40,504 - core.app_controller - INFO - Job ajouté: guepardeau.png (image)
+2025-06-28 17:49:40,504 - core.app_controller - INFO - Job ajouté: lionneaffamé.png (image)
+2025-06-28 17:49:40,504 - core.app_controller - INFO - Job ajouté: hyenevautour.png (image)
+2025-06-28 17:49:40,505 - core.app_controller - INFO - Job ajouté: 3impalas.png (image)
+2025-06-28 17:49:40,505 - core.app_controller - INFO - Job ajouté: plongeon.png (image)
+2025-06-28 17:49:40,506 - core.app_controller - INFO - Job ajouté: menace.png (image)
+2025-06-28 17:49:40,506 - core.app_controller - INFO - Job ajouté: reste.png (image)
+2025-06-28 17:49:40,507 - core.app_controller - INFO - Job ajouté: leguet.png (image)
+2025-06-28 17:49:40,507 - core.app_controller - INFO - Job ajouté: puce.png (image)
+2025-06-28 17:49:40,508 - core.app_controller - INFO - Job ajouté: 2louvards.png (image)
+2025-06-28 17:49:40,508 - core.app_controller - INFO - Job ajouté: lionagressif.png (image)
+2025-06-28 17:49:40,508 - core.app_controller - INFO - Job ajouté: lenvol.png (image)
+2025-06-28 17:49:40,509 - core.app_controller - INFO - Job ajouté: lepiege.png (image)
+2025-06-28 17:49:40,509 - core.app_controller - INFO - Job ajouté: détermination.png (image)
+2025-06-28 17:49:40,510 - core.app_controller - INFO - Job ajouté: serengeti.png (image)
+2025-06-28 17:49:40,511 - core.app_controller - INFO - Job ajouté: amarok.png (image)
+2025-06-28 17:49:40,511 - core.app_controller - INFO - Job ajouté: raid.png (image)
+2025-06-28 17:49:40,512 - core.app_controller - INFO - Job ajouté: chahut.png (image)
+2025-06-28 17:49:40,512 - core.app_controller - INFO - Job ajouté: okavango.png (image)
+2025-06-28 17:49:40,512 - core.app_controller - INFO - Job ajouté:  leguerrier.png (image)
+2025-06-28 17:49:40,513 - core.app_controller - INFO - Job ajouté: poursuite.png (image)
+2025-06-28 17:49:40,514 - core.app_controller - INFO - Job ajouté: lionnecombattant.png (image)
+2025-06-28 17:49:40,514 - core.app_controller - INFO - Job ajouté: vengeance.png (image)
+2025-06-28 17:49:40,515 - core.app_controller - INFO - Job ajouté: lionnedéfensive.png (image)
+2025-06-28 17:49:40,515 - core.app_controller - INFO - Job ajouté: lafuite.png (image)
+2025-06-28 17:49:40,516 - core.app_controller - INFO - Job ajouté: assaut.png (image)
+2025-06-28 17:49:40,516 - core.app_controller - INFO - Job ajouté: agressiondeguepard.png (image)
+2025-06-28 17:49:40,517 - core.app_controller - INFO - Job ajouté: monarbre.png (image)
+2025-06-28 17:49:40,518 - core.app_controller - INFO - Job ajouté: approche.png (image)
+2025-06-28 17:49:40,518 - core.app_controller - INFO - Job ajouté: oursepetit.png (image)
+2025-06-28 17:49:40,519 - core.app_controller - INFO - Job ajouté: panique.png (image)
+2025-06-28 17:49:40,519 - core.app_controller - INFO - Job ajouté: tendresse.png (image)
+2025-06-28 17:49:40,520 - core.app_controller - INFO - Job ajouté: offensivedelion.png (image)
+2025-06-28 17:49:40,520 - core.app_controller - INFO - Job ajouté: lacourseduguépard.png (image)
+2025-06-28 17:49:40,521 - core.app_controller - INFO - Job ajouté: chasseauximpalas.png (image)
+2025-06-28 17:49:40,522 - core.app_controller - INFO - Job ajouté: combatdetitans.png (image)
+2025-06-28 17:49:40,522 - core.app_controller - INFO - Job ajouté: soifdetigre.webp (image)
+2025-06-28 17:49:40,523 - core.app_controller - INFO - Job ajouté: survivre.png (image)
+2025-06-28 17:49:40,524 - core.app_controller - INFO - Job ajouté: instinctsdesurvie.png (image)
+2025-06-28 17:49:40,524 - core.app_controller - INFO - Job ajouté: ouste.png (image)
+2025-06-28 17:49:40,525 - core.app_controller - INFO - Job ajouté: querelle.png (image)
+2025-06-28 17:49:40,526 - core.app_controller - INFO - Job ajouté: attaq_guep avec arrière-plan supprimé.png (image)
+2025-06-28 17:49:40,526 - core.app_controller - INFO - Job ajouté: lechoc.png (image)
+2025-06-28 17:49:40,527 - core.app_controller - INFO - Job ajouté: reprisedelachasse.png (image)
+2025-06-28 17:49:40,527 - gui.main_window - INFO - ✅ 78 fichiers ajoutés
+2025-06-28 17:49:53,049 - gui.main_window - INFO - Global media type dropdown changed by user to: video
+2025-06-28 17:49:53,050 - gui.main_window - INFO - Updating UI. Media Type: video, Job Config: None, Global Context: True
+2025-06-28 17:49:53,050 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': 'medium'}
+2025-06-28 17:49:53,051 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 17:49:53,051 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 17:49:53,052 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '22'}

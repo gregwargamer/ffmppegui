@@ -544,7 +544,7 @@ class MainWindow:
         preset_frame.pack(fill=tk.X, pady=(0, 5))
         self.preset_combo = ttk.Combobox(preset_frame, textvariable=self.preset_name_var, state="readonly")
         self.preset_combo.pack(fill=tk.X, expand=True)
-        self.preset_combo.bind("<<ComboboxSelected>>", self._load_preset)
+        self.preset_combo.bind("<<ComboboxSelected>>", lambda event: self._load_preset_by_name(self.preset_name_var.get()))
 
         media_type_frame = ttk.LabelFrame(main_frame, text="Type de Média", padding="5")
         media_type_frame.pack(fill=tk.X, pady=(0, 5))
@@ -732,7 +732,7 @@ class MainWindow:
         
     def _on_media_type_change(self, event=None):
         """Called when the user changes the global media type dropdown."""
-        selected_global_media_type = self.global_type_var.get()
+        selected_global_media_type = event.widget.get()
         self.logger.info(f"Global media type dropdown changed by user to: {selected_global_media_type}")
 
         # Update AppState. This will also reset related global settings in AppState (codec, encoder, etc.)
@@ -784,6 +784,8 @@ class MainWindow:
         # Update AppState if this is a global context change
         if not self.selected_job_for_settings_var.get(): # If no specific job is selected
              self.state.update_global_encoding_settings(encoder=new_encoder)
+
+
 
     def _get_current_job_output_config_for_ui(self) -> Optional[OutputConfig]:
         """Helper to get the OutputConfig for the currently selected job in the settings UI, or None."""
@@ -2273,11 +2275,7 @@ class MainWindow:
     # _update_ui_for_media_type_and_settings(job.mode, job.outputs[0], is_global_context=False)
     # from _on_job_selected_for_settings_change. So, this method can be removed.
 
-    def _load_preset(self, event=None):
-        preset_name = self.preset_name_var.get()
-        if not preset_name:
-            return
-        self._load_preset_by_name(preset_name)
+    
 
     def _on_resolution_change(self, event=None):
         """Affiche ou cache les champs de résolution personnalisée selon le choix."""
