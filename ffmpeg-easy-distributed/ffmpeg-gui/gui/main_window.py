@@ -848,7 +848,7 @@ class MainWindow:
 
     def _enqueue_paths(self, paths: list[Path]):
         out_root = Path(self.output_folder.get()) if self.output_folder.get() and not self.output_folder.get().startswith("(no") else None
-        keep_structure = Settings.data.get("keep_folder_structure", True)
+        keep_structure = self.settings.data.get("keep_folder_structure", True)
         input_folder = self.input_folder.get()
         
         current_batch_job_ids = []

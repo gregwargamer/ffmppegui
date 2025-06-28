@@ -93,7 +93,8 @@ install_dependencies() {
         apt-transport-https \
         ca-certificates \
         gnupg \
-        lsb-release
+        lsb-release \
+        ufw
     
     # Installation de Python 3.12 si nécessaire
     if ! command -v python3.12 &> /dev/null; then
