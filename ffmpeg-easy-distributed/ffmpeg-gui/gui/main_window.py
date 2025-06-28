@@ -328,11 +328,18 @@ class MainWindow:
             self.logger.info(f"✅ Interface adaptative initialisée - Type de média: {current_type}")
             
             # Forcer une mise à jour complète pour s'assurer que tout est cohérent
-            self._update_media_type_ui(current_type)
-            self._update_codec_choices()
-            self._update_encoder_choices()
-            self._update_container_choices()
-            self._update_quality_controls_for_global()
+            # self._update_media_type_ui(current_type) # Handled by orchestrator
+            # self._update_codec_choices() # Handled by orchestrator
+            # self._update_encoder_choices() # Handled by orchestrator
+            # self._update_container_choices() # Handled by orchestrator
+            # self._update_quality_controls_for_global() # Old method
+
+            # Call the new orchestrator for initial setup based on global state
+            self._update_ui_for_media_type_and_settings(
+                media_type=self.state.global_media_type,
+                output_config=None,
+                is_global_context=True
+            )
         
         self.logger.info("🎯 Interface utilisateur entièrement initialisée")
 
@@ -721,19 +728,71 @@ class MainWindow:
         self.root.after(100, self._update_scroll_state)
         
     def _on_media_type_change(self, event=None):
-        media_type = self.global_type_var.get()
-        # La logique de mise à jour de l'UI est maintenant gérée par l'observateur
-        # qui réagit au changement d'état.
-        self.controller.set_global_media_type(media_type)
+        """Called when the user changes the global media type dropdown."""
+        selected_global_media_type = self.global_type_var.get()
+        self.logger.info(f"Global media type dropdown changed by user to: {selected_global_media_type}")
+
+        # Update AppState. This will also reset related global settings in AppState (codec, encoder, etc.)
+        # and notify observers. The logging part is handled by the controller now.
+        self.controller.set_global_media_type(selected_global_media_type)
+
+        # After controller updates AppState, AppState.global_media_type is selected_global_media_type.
+        # AppState.global_codec, global_encoder, global_container are now blank.
+        # The _update_ui_for_media_type_and_settings call will handle syncing UI vars from these
+        # new blank AppState values and then populating choices correctly.
+        self._update_ui_for_media_type_and_settings(selected_global_media_type, output_config=None, is_global_context=True)
     
     def _on_codec_change(self, event=None):
-        self._update_encoder_choices()
-        self._update_container_choices()
-        self._update_quality_controls_for_global()
-    
+        """Called when the codec selection changes."""
+        media_type = self.global_type_var.get()
+        new_codec = self.global_codec_var.get()
+        self.logger.debug(f"Codec changed to: {new_codec} for media type: {media_type}")
+
+        self._update_encoder_choices(for_media_type=media_type, codec=new_codec)
+        # Encoder change will trigger its own _on_encoder_change, which handles further updates.
+        # However, if encoder doesn't change but codec did, we might need to force update quality controls.
+        # Let's ensure _on_encoder_change is robust or call downstream updates here too.
+
+        # For now, let _on_encoder_change handle the rest if it's triggered.
+        # If global_encoder_var didn't change value, _on_encoder_change might not fire.
+        # So, we explicitly update downstream elements that depend on codec or encoder.
+        current_encoder = self.global_encoder_var.get() # This would be the newly set encoder if it changed
+        self._update_container_choices(for_media_type=media_type)
+        self._update_quality_preset_controls(encoder=current_encoder)
+        self._update_quality_controls_ui(media_type=media_type, encoder=current_encoder, codec=new_codec,
+                                         output_config=self._get_current_job_output_config_for_ui()) # Pass current job's config
+
+        # Update AppState if this is a global context change
+        if not self.selected_job_for_settings_var.get(): # If no specific job is selected
+            self.state.update_global_encoding_settings(codec=new_codec, encoder=current_encoder)
+
+
     def _on_encoder_change(self, event=None):
-        self._update_quality_preset_controls()
-        self._update_quality_controls_for_global()
+        """Called when the encoder selection changes."""
+        media_type = self.global_type_var.get()
+        codec = self.global_codec_var.get() # Current codec
+        new_encoder = self.global_encoder_var.get()
+        self.logger.debug(f"Encoder changed to: {new_encoder} for media type: {media_type}, codec: {codec}")
+
+        self._update_quality_preset_controls(encoder=new_encoder)
+        self._update_quality_controls_ui(media_type=media_type, encoder=new_encoder, codec=codec,
+                                         output_config=self._get_current_job_output_config_for_ui())
+
+        # Update AppState if this is a global context change
+        if not self.selected_job_for_settings_var.get(): # If no specific job is selected
+             self.state.update_global_encoding_settings(encoder=new_encoder)
+
+    def _get_current_job_output_config_for_ui(self) -> Optional[OutputConfig]:
+        """Helper to get the OutputConfig for the currently selected job in the settings UI, or None."""
+        selected_job_name = self.selected_job_for_settings_var.get()
+        if not selected_job_name:
+            return None
+        # Ensure self.state.jobs is the correct list of jobs
+        target_job = next((j for j in self.state.jobs if j.src_path.name == selected_job_name), None)
+        if target_job and target_job.outputs:
+            return target_job.outputs[0]
+        self.logger.debug(f"No output config found for UI for job: {selected_job_name}")
+        return None
     
     def _on_tonemap_change(self):
         if self.tonemap_var.get():
@@ -832,7 +891,15 @@ class MainWindow:
         self.trim_start_var.set("")
         self.trim_end_var.set("")
         
-        self._update_codec_choices()
+        # self._update_codec_choices() # Orchestrator will handle this and more
+
+        # After resetting vars, call the orchestrator to update the UI to reflect these defaults
+        # for the "video" media type (which is the default reset type).
+        self._update_ui_for_media_type_and_settings(
+            media_type="video", # Resetting to video defaults
+            output_config=None,
+            is_global_context=True
+        )
         messagebox.showinfo("Settings Reset", "All encoding settings have been reset to default values")
 
     def _build_menu(self):
@@ -1699,15 +1766,25 @@ class MainWindow:
         self.global_codec_var.set(preset_data.get("codec", ""))
         
         # Mettre à jour les choix de codec AVANT de définir l'encodeur
-        self._update_codec_choices()
+        # Pass the media type from preset to ensure codec choices are for the correct type
+        self._update_codec_choices(for_media_type=preset_data.get("media_type", "video"))
 
         def apply_remaining_preset():
             encoder_name = preset_data.get("encoder", "")
             encoder_display = ""
             # On cherche la description complète de l'encodeur pour l'afficher
-            for item in self.global_encoder_combo['values']:
-                if item.startswith(encoder_name):
-                    encoder_display = item
+            # Values in global_encoder_combo should be populated by _update_encoder_choices,
+            # which is called by _update_codec_choices if codec changes, or by orchestrator.
+            # Ensure encoder choices are for the *preset's codec* before finding display name.
+            # This might require calling _update_encoder_choices here if not already done correctly.
+            # For now, assume self.global_encoder_combo['values'] is correctly populated for the preset's codec.
+            # This implies _update_codec_choices correctly set the preset's codec, and then called _update_encoder_choices.
+            # Let's call _update_encoder_choices explicitly for the preset's codec to be safe.
+            self._update_encoder_choices(for_media_type=self.global_type_var.get(), codec=self.global_codec_var.get())
+
+            for item_val in self.global_encoder_combo['values']:
+                if item_val.startswith(encoder_name):
+                    encoder_display = item_val
                     break
             self.global_encoder_var.set(encoder_display or encoder_name)
 
@@ -1715,28 +1792,41 @@ class MainWindow:
             self.quality_var.set(str(preset_data.get("quality_or_cq", "22")))
             self.bitrate_var.set(str(preset_data.get("bitrate", "4000")))
             self.multipass_var.set(preset_data.get("multipass", False))
-            self.preset_var.set(preset_data.get("preset", "medium"))
+            self.preset_var.set(preset_data.get("preset", "medium")) # This is encoder preset
 
             self.resolution_var_settings.set(preset_data.get("resolution", "Keep Original"))
             crop_settings = preset_data.get("crop", {})
-            self.crop_top_var.set(crop_settings.get("top", "0"))
-            self.crop_bottom_var.set(crop_settings.get("bottom", "0"))
-            self.crop_left_var.set(crop_settings.get("left", "0"))
-            self.crop_right_var.set(crop_settings.get("right", "0"))
+            self.crop_top_var.set(str(crop_settings.get("top", "0")))
+            self.crop_bottom_var.set(str(crop_settings.get("bottom", "0")))
+            self.crop_left_var.set(str(crop_settings.get("left", "0")))
+            self.crop_right_var.set(str(crop_settings.get("right", "0")))
             
             self.preserve_hdr_var.set(preset_data.get("preserve_hdr", True))
             self.tonemap_var.set(preset_data.get("tonemap", False))
             self.tonemap_method_var.set(preset_data.get("tonemap_method", "hable"))
 
-            self._on_video_mode_change()
-            self._on_tonemap_change()
-            self._update_quality_preset_controls()
+            self.subtitle_mode_var.set(preset_data.get("subtitle_mode", "copy"))
+            self.subtitle_path_var.set(preset_data.get("subtitle_path", ""))
+            self.lut_path_var.set(preset_data.get("lut_path", ""))
+            watermark_cfg = preset_data.get("watermark", {})
+            self.watermark_path_var.set(watermark_cfg.get('path', ""))
+            self.watermark_position_var.set(watermark_cfg.get('position', "top_right"))
+            self.watermark_scale_var.set(float(watermark_cfg.get('scale', 0.1)))
+            self.watermark_opacity_var.set(float(watermark_cfg.get('opacity', 1.0)))
+            self.watermark_padding_var.set(int(watermark_cfg.get('padding', 10)))
+            self.custom_flags_var.set(preset_data.get("custom_flags", ""))
 
-        # On attend un court instant pour s'assurer que l'UI a mis à jour les listes
+
+            # After setting all StringVars from preset_data, call the main UI orchestrator.
+            self._update_ui_for_media_type_and_settings(
+                media_type=self.global_type_var.get(), # This was set from preset
+                output_config=None, # Preset is loaded into global view, not a specific job's output
+                is_global_context=True
+            )
+            messagebox.showinfo("Préréglage chargé", f"Le préréglage '{name}' a été chargé.")
+
         self.root.after(100, apply_remaining_preset)
         
-        messagebox.showinfo("Préréglage chargé", f"Le préréglage '{name}' a été chargé.")
-
     def _show_log_viewer(self):
         messagebox.showinfo("Non implémenté", "Fonctionnalité en cours de développement")
 
@@ -1773,23 +1863,28 @@ class MainWindow:
         for preset_name in presets:
             preset_menu.add_command(label=preset_name, command=lambda name=preset_name: self._load_preset_by_name(name))
 
-    def _update_codec_choices(self):
-        media_type = self.global_type_var.get()
+    def _update_codec_choices(self, for_media_type: Optional[str] = None):
+        media_type_to_use = for_media_type if for_media_type is not None else self.global_type_var.get()
+        self.logger.debug(f"Updating codec choices for media type: {media_type_to_use}")
+
         all_codecs = FFmpegHelpers.available_codecs()
+        codecs_for_type = all_codecs.get(media_type_to_use, [])
         
-        codecs_for_type = all_codecs.get(media_type, [])
+        current_codec_val = self.global_codec_var.get() # Preserve current if valid in new list
         self.global_codec_combo['values'] = codecs_for_type
         
-        if codecs_for_type:
-            # Si aucun codec n'est sélectionné ou si le codec actuel n'est pas compatible
-            current_codec = self.global_codec_var.get()
-            if not current_codec or current_codec not in codecs_for_type:
-                self.global_codec_var.set(codecs_for_type[0])
+        if current_codec_val and current_codec_val in codecs_for_type:
+            self.global_codec_var.set(current_codec_val)
+        elif codecs_for_type:
+            self.global_codec_var.set(codecs_for_type[0])
         else:
             self.global_codec_var.set("")
             
-        # Mettre à jour les encodeurs après avoir défini le codec
-        self._update_encoder_choices()
+        # Important: Do NOT call _update_encoder_choices() here directly if this method
+        # is part of a larger refresh sequence (e.g., called by _update_ui_for_media_type_and_settings).
+        # The orchestrating method should handle the sequence.
+        # If called standalone (e.g. directly from _on_media_type_change's first step),
+        # then the caller is responsible for the next step.
 
     def _update_media_type_ui(self, media_type):
         is_video = media_type == "video"
@@ -1833,7 +1928,17 @@ class MainWindow:
         self.job_selector_combobox['values'] = job_names
         if job_names:
             self.job_selector_combobox.set(job_names[-1])
-            self._load_settings_from_selected_job()
+            # Setting the combobox value will trigger its <<ComboboxSelected>> event,
+            # which is bound to _on_job_selected_for_settings_change.
+            # _on_job_selected_for_settings_change now calls the new orchestrator.
+            # So, no explicit call to load settings is needed here anymore.
+        elif not job_names and hasattr(self, 'selected_job_for_settings_var'):
+            # No jobs, clear the selection and revert UI to global defaults
+            self.selected_job_for_settings_var.set("")
+            # Trigger update to global defaults if no job is selected
+            current_global_media_type = self.state.global_media_type
+            self._update_ui_for_media_type_and_settings(current_global_media_type, output_config=None, is_global_context=True)
+
 
     def _update_inspector_file_list(self):
         self.inspector_tree.delete(*self.inspector_tree.get_children())
@@ -1931,7 +2036,44 @@ class MainWindow:
 
     # Méthodes manquantes de _build_encoding_section
     def _on_job_selected_for_settings_change(self, event=None):
-        self._load_settings_from_selected_job()
+        selected_job_name = self.selected_job_for_settings_var.get()
+        if not selected_job_name:
+            # No job selected in combobox, revert to global settings view
+            # The global_type_var should already reflect the user's choice in the main media type dropdown.
+            # Or, if AppState's global_media_type is the source of truth, sync from that.
+            # For now, assume global_type_var is the current global context.
+            current_global_media_type = self.state.global_media_type # Get from AppState
+            self.global_type_var.set(current_global_media_type) # Ensure UI var matches
+            self._update_ui_for_media_type_and_settings(current_global_media_type, output_config=None, is_global_context=True)
+            return
+
+        target_job = next((j for j in self.state.jobs if j.src_path.name == selected_job_name), None)
+
+        if not target_job:
+            self.logger.warning(f"Job '{selected_job_name}' not found for settings configuration.")
+            # Fallback to global settings view if job disappears or something unexpected.
+            current_global_media_type = self.state.global_media_type
+            self.global_type_var.set(current_global_media_type)
+            self._update_ui_for_media_type_and_settings(current_global_media_type, output_config=None, is_global_context=True)
+            return
+
+        # We have a target_job. Update the encoding settings UI based on its type and settings.
+        job_media_type = target_job.mode
+
+        # Set the global_type_var to the job's media type for visual consistency in the media type dropdown.
+        # This specific `set` should not trigger a global context change by `_on_media_type_change`.
+        # The `is_global_context=False` in the call below handles this.
+        if self.global_type_var.get() != job_media_type: # Only set if different to avoid unnecessary trace fires
+            self.global_type_var.set(job_media_type)
+
+        # Pass the first output's config. Jobs should ideally always have at least one.
+        job_output_config = target_job.outputs[0] if target_job.outputs else None
+        if not job_output_config:
+             self.logger.warning(f"Job '{selected_job_name}' has no output configurations. UI might not fully update.")
+             # Create a temporary default OutputConfig for UI purposes if needed, or handle gracefully.
+             # For now, pass None, _update_ui_for_media_type_and_settings will use defaults for the job's media type.
+
+        self._update_ui_for_media_type_and_settings(job_media_type, output_config=job_output_config, is_global_context=False)
 
     def _apply_ui_settings_to_selected_job_via_combobox(self):
         selected_job_name = self.selected_job_for_settings_var.get()
@@ -2038,6 +2180,7 @@ class MainWindow:
         # Encodeur et codec
         encoder_display = self.global_encoder_var.get()
         output_cfg.encoder = self._get_encoder_name_from_display(encoder_display)
+        output_cfg.codec = self.global_codec_var.get() # Apply the selected codec
         
         # Container et chemin de destination
         container = self.container_var.get()
@@ -2123,49 +2266,9 @@ class MainWindow:
         else:
             ttk.Label(self.inspector_info_frame, text="Informations média non disponibles.").grid(row=0, column=0, columnspan=2, sticky="w", padx=5, pady=2)
 
-    def _load_settings_from_selected_job(self):
-        """Charge les paramètres d'un job sélectionné dans l'UI."""
-        job_name = self.selected_job_for_settings_var.get()
-        if not job_name:
-            return
-
-        job = next((j for j in self.jobs if j.src_path.name == job_name), None)
-        if not job:
-            return
-            
-        output_cfg = job.outputs[0] # On prend la première config de sortie
-        
-        self.global_type_var.set(job.mode)
-        self._update_media_type_ui(job.mode)
-
-        # Utiliser l'attribut correct pour le codec - vérifier s'il existe
-        codec_value = getattr(output_cfg, 'codec', '') or output_cfg.encoder.split('_')[0] if hasattr(output_cfg, 'encoder') and output_cfg.encoder else ''
-        self.global_codec_var.set(codec_value)
-        self._update_codec_choices()
-
-        # Trouver le display name de l'encodeur
-        encoder_display = ""
-        encoder_name = getattr(output_cfg, 'encoder', '')
-        if encoder_name:
-            for item in self.global_encoder_combo['values']:
-                if item.startswith(encoder_name):
-                    encoder_display = item
-                    break
-            self.global_encoder_var.set(encoder_display or encoder_name)
-        self._update_encoder_choices()
-        
-        self.container_var.set(getattr(output_cfg, 'container', ''))
-        self.video_mode_var.set(getattr(output_cfg, 'video_mode', 'quality'))
-        self.quality_var.set(getattr(output_cfg, 'quality', '') or getattr(output_cfg, 'cq_value', ''))
-        self.bitrate_var.set(getattr(output_cfg, 'bitrate', ''))
-        self.multipass_var.set(getattr(output_cfg, 'multipass', False))
-        self.preset_var.set(getattr(output_cfg, 'preset', ''))
-        
-        extra_params = getattr(output_cfg, 'extra_params', [])
-        self.custom_flags_var.set(" ".join(extra_params) if extra_params else "")
-
-        # Mettre à jour les contrôles
-        self._on_video_mode_change()
+    # _load_settings_from_selected_job is now effectively replaced by calling
+    # _update_ui_for_media_type_and_settings(job.mode, job.outputs[0], is_global_context=False)
+    # from _on_job_selected_for_settings_change. So, this method can be removed.
 
     def _load_preset(self, event=None):
         preset_name = self.preset_name_var.get()
@@ -2190,52 +2293,248 @@ class MainWindow:
         self.multipass_check.config(state="disabled" if is_quality_mode else "normal")
         # Mettre à jour les étiquettes/valeurs liées si nécessaire
 
-    def _update_container_choices(self):
+    def _update_container_choices(self, for_media_type: Optional[str] = None):
         """Met à jour la liste des conteneurs compatibles avec le type de média sélectionné."""
-        media_type = self.global_type_var.get()
-        if media_type == "video":
-            containers = ["mp4", "mkv", "mov", "webm"]
-        elif media_type == "audio":
-            containers = ["m4a", "mp3", "opus", "flac", "ogg"]
-        elif media_type == "image":
-            containers = ["png", "jpg", "webp", "avif", "jxl", "heic"]
-        else:
-            containers = []
-        
+        media_type_to_use = for_media_type if for_media_type is not None else self.global_type_var.get()
+        self.logger.debug(f"Updating container choices for media type: {media_type_to_use}")
+
+        containers: List[str] = []
+        if media_type_to_use == "video":
+            containers = ["mp4", "mkv", "mov", "webm", "avi"]
+        elif media_type_to_use == "audio":
+            containers = ["m4a", "mp3", "opus", "flac", "ogg", "wav", "aac"]
+        elif media_type_to_use == "image":
+            # For images, container often matches codec, but some codecs can go in generic containers too.
+            # FFmpeg often uses the codec name as format for single images e.g. -f image2 or -f webp
+            # This list represents common output formats for image sequences or single images.
+            containers = ["png", "jpg", "webp", "avif", "jxl", "heic", "tiff", "bmp", "gif"]
+
+        current_container_val = self.container_var.get() # Preserve
         self.container_combo['values'] = containers
-        # Toujours définir le premier conteneur de la liste pour ce type de média
-        if containers:
-            current_container = self.container_var.get()
-            if not current_container or current_container not in containers:
+
+        if current_container_val and current_container_val in containers:
+            self.container_var.set(current_container_val)
+        elif containers:
+            # Smart default based on current codec if possible
+            codec = self.global_codec_var.get()
+            smart_default = ""
+            if media_type_to_use == "video":
+                if codec == "h264" or codec == "hevc": smart_default = "mp4"
+                elif codec == "av1" or codec == "vp9": smart_default = "webm"
+                elif codec == "prores": smart_default = "mov"
+            elif media_type_to_use == "audio":
+                if codec == "aac": smart_default = "m4a"
+                elif codec == "opus": smart_default = "opus" # or ogg
+                elif codec == "flac": smart_default = "flac"
+                elif codec == "mp3": smart_default = "mp3"
+            elif media_type_to_use == "image": # Often codec name is the format
+                if codec in containers: smart_default = codec
+
+            if smart_default and smart_default in containers:
+                self.container_var.set(smart_default)
+            else:
                 self.container_var.set(containers[0])
+        else:
+            self.container_var.set("")
 
-    def _update_quality_preset_controls(self):
+    def _update_quality_preset_controls(self, encoder: Optional[str] = None):
         """Met à jour la liste des presets d'encodeur disponibles en fonction de l'encodeur choisi."""
-        encoder_name = self._get_encoder_name_from_display(self.global_encoder_var.get())
-        presets = ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"]
-        
-        # Certains encodeurs disposent de préréglages différents
-        if "qsv" in encoder_name or "nvenc" in encoder_name:
-            presets = ["default", "slow", "medium", "fast", "hp", "hq", "ll", "llhq", "llhp", "lossless"]
-        elif "amf" in encoder_name:
-            presets = ["balanced", "speed", "quality"]
-        
-        self.quality_entry['values'] = presets
-        if self.preset_var.get() not in presets:
-            self.preset_var.set(presets[0] if presets else "")
+        encoder_to_use = encoder if encoder is not None else self.global_encoder_var.get()
+        encoder_name_short = self._get_encoder_name_from_display(encoder_to_use) # Gets the actual encoder name e.g. libx264
+        self.logger.debug(f"Updating quality preset controls for encoder: {encoder_name_short}")
 
-    def _update_encoder_choices(self):
+        presets: List[str] = []
+        # Default presets for libx264, libx265, libvpx, etc.
+        if any(e in encoder_name_short for e in ["libx264", "libx265", "libvpx", "libaom", "rav1e", "svt"]):
+            presets = ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"]
+        elif "qsv" in encoder_name_short or "nvenc" in encoder_name_short or "amf" in encoder_name_short or "videotoolbox" in encoder_name_short:
+            # Hardware encoders often use different preset names
+             presets = ["default", "slow", "medium", "fast", "hp", "hq", "ll", "llhq", "llhp", "lossless", "p1", "p2", "p3", "p4", "p5", "p6", "p7"] # Generic list, can be refined
+             if "qsv" in encoder_name_short: # Intel QSV specific
+                 presets = ["veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"] # QSV specific, maps to quality levels
+             elif "nvenc" in encoder_name_short: # NVIDIA NVENC specific
+                 presets = ["default", "slow", "medium", "fast", "hp", "hq", "bd", "ll", "llhq", "llhp", "lossless", "losslesshp", "p1", "p2", "p3", "p4", "p5", "p6", "p7"]
+             elif "amf" in encoder_name_short: # AMD AMF specific
+                 presets = ["balanced", "speed", "quality"]
+             elif "videotoolbox" in encoder_name_short: # Apple VideoToolbox
+                 presets = [] # VideoToolbox doesn't typically expose named presets like this, quality is via bitrate/crf like params
+        # Audio/Image encoders usually don't have "speed" presets like video encoders.
+        # For those, this list will be empty, and the combobox might be hidden or disabled by _update_quality_controls_for_global
+
+        current_preset_val = self.preset_var.get() # Preserve
+        self.quality_entry['values'] = presets
+
+        if current_preset_val and current_preset_val in presets:
+            self.preset_var.set(current_preset_val)
+        elif presets:
+            if "medium" in presets: # Default to medium if available
+                 self.preset_var.set("medium")
+            else:
+                 self.preset_var.set(presets[0])
+        else:
+            self.preset_var.set("")
+
+
+    def _update_encoder_choices(self, for_media_type: Optional[str] = None, codec: Optional[str] = None):
         """Met à jour la liste des encodeurs compatibles avec le codec sélectionné et ajoute les encodeurs matériels distants."""
-        selected_codec = self.global_codec_var.get()
-        if not selected_codec:
+        # media_type_to_use = for_media_type if for_media_type is not None else self.global_type_var.get() # Not directly used for encoder logic here but good for logging
+        codec_to_use = codec if codec is not None else self.global_codec_var.get()
+
+    def _update_ui_for_media_type_and_settings(self, media_type: str, output_config: Optional[OutputConfig] = None, is_global_context: bool = False):
+        """
+        Orchestrates the update of the encoding settings UI based on the given media type
+        and specific output configuration OR global defaults.
+
+        Args:
+            media_type: The media type ("video", "audio", "image") to adapt the UI for.
+            output_config: The specific OutputConfig of a job to load settings from.
+                           If None, UI reflects global defaults for the media_type.
+            is_global_context: True if this update is for global settings (e.g. user changed main media type dropdown),
+                               False if for a specific job selected in the job combobox.
+        """
+        self.logger.info(f"Updating UI. Media Type: {media_type}, Job Config: {'Provided' if output_config else 'None'}, Global Context: {is_global_context}")
+
+        # 0. If this is a global context change, ensure AppState reflects the new global media type
+        #    and its associated blank codec/encoder values.
+        if is_global_context:
+            self.global_type_var.set(self.state.global_media_type) # Should match 'media_type' arg
+            self.global_codec_var.set(self.state.global_codec)     # Will be blank from AppState
+            self.global_encoder_var.set(self.state.global_encoder) # Will be blank from AppState
+            self.container_var.set(self.state.global_container)   # Will be blank from AppState
+
+            # Reset other UI vars to reflect a fresh global context for the *new* media_type
+            # Quality/Bitrate should use defaults for the new media_type and potentially blank encoder
+            temp_encoder_for_defaults = self.state.global_encoder # which is blank
+            self.quality_var.set(self._get_optimal_quality_for_codec(temp_encoder_for_defaults, media_type))
+            self.bitrate_var.set(self._get_optimal_quality_for_codec(temp_encoder_for_defaults, media_type, mode="bitrate"))
+            self.preset_var.set("medium")
+            self.video_mode_var.set("quality")
+            self.custom_flags_var.set("")
+
+            self.resolution_var_settings.set(self.state.settings.ui.default_resolution or "Keep Original")
+            self.crop_top_var.set("0"); self.crop_bottom_var.set("0"); self.crop_left_var.set("0"); self.crop_right_var.set("0")
+            self.preserve_hdr_var.set(True); self.tonemap_var.set(False); self.tonemap_method_var.set("hable")
+            self.subtitle_mode_var.set("copy"); self.subtitle_path_var.set("")
+            self.lut_path_var.set(""); self.watermark_path_var.set("")
+            self.watermark_position_var.set("top_right"); self.watermark_scale_var.set(0.1)
+            self.watermark_opacity_var.set(1.0); self.watermark_padding_var.set(10)
+
+        # 1. Update visibility of UI sections based on media_type
+        self._update_media_type_ui(media_type)
+
+        # 2. Update codec choices based on media_type. This will also set self.global_codec_var.
+        self._update_codec_choices(for_media_type=media_type)
+
+        # 3. If a specific job's output_config is provided, load its settings into UI variables
+        if output_config and not is_global_context: # only load if not in global context
+            self.logger.debug(f"Loading settings from provided output_config for job: {getattr(output_config, 'name', 'N/A')}")
+
+            job_codec = getattr(output_config, 'codec', '')
+            if not job_codec and output_config.encoder:
+                # Attempt to derive codec from encoder
+                # This is a simplified approach and might need a more robust mapping utility
+                # For example, 'libx264' -> 'h264', 'hevc_nvenc' -> 'hevc'
+                encoder_name_lower = output_config.encoder.lower()
+                if "264" in encoder_name_lower or "avc" in encoder_name_lower: job_codec = "h264"
+                elif "265" in encoder_name_lower or "hevc" in encoder_name_lower: job_codec = "hevc"
+                elif "vp9" in encoder_name_lower: job_codec = "vp9"
+                elif "av1" in encoder_name_lower: job_codec = "av1"
+                elif "aac" in encoder_name_lower: job_codec = "aac"
+                elif "mp3" in encoder_name_lower: job_codec = "mp3"
+                elif "flac" in encoder_name_lower: job_codec = "flac"
+                elif "opus" in encoder_name_lower: job_codec = "opus"
+                elif "webp" in encoder_name_lower: job_codec = "webp"
+                elif "png" in encoder_name_lower: job_codec = "png"
+                elif "jp" in encoder_name_lower: job_codec = "jpeg" # for jpeg, mjpeg, jpegxl
+                # Fallback: check if any part of the encoder name is a known codec for this media type
+                if not job_codec:
+                    available_codecs_for_type = FFmpegHelpers.available_codecs().get(media_type, [])
+                    for ac_known in available_codecs_for_type:
+                        if ac_known in encoder_name_lower:
+                            job_codec = ac_known
+                            break
+            self.global_codec_var.set(job_codec if job_codec else "") # Set codec, then update encoders
+
+            # Update encoder choices now that codec is (potentially) set for the job
+            self._update_encoder_choices(for_media_type=media_type, codec=self.global_codec_var.get())
+
+            encoder_name = getattr(output_config, 'encoder', '')
+            encoder_display = ""
+            if encoder_name: # Find full display name for the encoder
+                for item_value in self.global_encoder_combo['values']: # Check against current combo values
+                    if item_value.startswith(encoder_name):
+                        encoder_display = item_value; break
+            self.global_encoder_var.set(encoder_display or encoder_name)
+
+            self.container_var.set(getattr(output_config, 'container', ''))
+            self.video_mode_var.set(getattr(output_config, 'video_mode', 'quality'))
+
+            quality_val = getattr(output_config, 'quality', '')
+            if not quality_val and hasattr(output_config, 'cq_value'): quality_val = getattr(output_config, 'cq_value', '')
+            self.quality_var.set(str(quality_val))
+
+            self.bitrate_var.set(str(getattr(output_config, 'bitrate', '')))
+            self.multipass_var.set(getattr(output_config, 'multipass', False))
+            self.preset_var.set(getattr(output_config, 'preset', 'medium'))
+            self.custom_flags_var.set(getattr(output_config, 'custom_flags', ''))
+
+            self.resolution_var_settings.set(getattr(output_config, 'resolution', "Keep Original"))
+            crop_settings = getattr(output_config, 'crop', {})
+            self.crop_top_var.set(str(crop_settings.get("top", "0"))); self.crop_bottom_var.set(str(crop_settings.get("bottom", "0")))
+            self.crop_left_var.set(str(crop_settings.get("left", "0"))); self.crop_right_var.set(str(crop_settings.get("right", "0")))
+
+            self.preserve_hdr_var.set(getattr(output_config, 'preserve_hdr', True))
+            self.tonemap_var.set(getattr(output_config, 'tonemap', False))
+            self.tonemap_method_var.set(getattr(output_config, 'tonemap_method', "hable"))
+
+            self.subtitle_mode_var.set(getattr(output_config, 'subtitle_mode', "copy"))
+            self.subtitle_path_var.set(getattr(output_config, 'subtitle_path', ""))
+
+            self.lut_path_var.set(getattr(output_config, 'lut_path', ""))
+            watermark_cfg = getattr(output_config, 'watermark', {})
+            self.watermark_path_var.set(watermark_cfg.get('path', "")); self.watermark_position_var.set(watermark_cfg.get('position', "top_right"))
+            self.watermark_scale_var.set(float(watermark_cfg.get('scale', 0.1))); self.watermark_opacity_var.set(float(watermark_cfg.get('opacity', 1.0)))
+            self.watermark_padding_var.set(int(watermark_cfg.get('padding', 10)))
+        else:
+            # No specific output_config OR is_global_context: ensure encoder choices are updated for current global codec
+            # (which might have been set by _update_codec_choices or by the global_context block above)
+            self._update_encoder_choices(for_media_type=media_type, codec=self.global_codec_var.get())
+
+        # 4. Update container choices (depends on media_type, potentially codec)
+        self._update_container_choices(for_media_type=media_type)
+
+        # 5. Update quality presets (depends on encoder)
+        self._update_quality_preset_controls(encoder=self.global_encoder_var.get())
+
+        # 6. Update the actual quality control widgets (CQ entry, bitrate entry, labels)
+        # Pass the job's output_config if available AND not in a global context, else it uses UI vars reflecting global defaults.
+        effective_output_config_for_quality = output_config if output_config and not is_global_context else None
+        self._update_quality_controls_ui(media_type=media_type,
+                                         encoder=self.global_encoder_var.get(),
+                                         codec=self.global_codec_var.get(),
+                                         output_config=effective_output_config_for_quality)
+
+        # 7. Refresh UI states for controls that depend on others using their current var values
+        self._on_video_mode_change()
+        self._on_tonemap_change()
+        self._on_subtitle_mode_change()
+        self._on_resolution_change()
+
+        self.logger.debug(f"UI Update complete. UI Vars: Type={self.global_type_var.get()}, Codec={self.global_codec_var.get()}, Enc={self.global_encoder_var.get()}, Cont={self.container_var.get()}")
+
+        self.logger.debug(f"Updating encoder choices for codec: {codec_to_use}")
+
+        if not codec_to_use:
             self.global_encoder_combo['values'] = []
             self.global_encoder_var.set("")
             return
 
         # 1. Encodeurs locaux compatibles
-        local_encoders = FFmpegHelpers.available_encoders()
+        local_encoders_info = FFmpegHelpers.available_encoders() # Expect list of dicts
         compatible_local = [
-            f"{enc['name']} - {enc['description']}" for enc in local_encoders if enc['codec'] == selected_codec
+            f"{enc['name']} - {enc['description']}"
+            for enc in local_encoders_info
+            if enc.get('codec') == codec_to_use # Use .get for safety
         ]
         
         # Ajouter des encodeurs par défaut si aucun n'est trouvé pour certains codecs
@@ -2243,192 +2542,379 @@ class MainWindow:
             fallback_encoders = {
                 'webp': 'libwebp - WebP encoder',
                 'jpegxl': 'libjxl - JPEG XL encoder', 
-                'heic': 'libx265 - HEIC encoder',
-                'avif': 'libaom-av1 - AVIF encoder',
+                'heic': 'libx265 - HEIC encoder', # Typically uses HEVC encoders
+                'avif': 'libaom-av1 - AVIF encoder', # Typically uses AV1 encoders
                 'png': 'png - PNG encoder',
-                'jpeg': 'mjpeg - JPEG encoder',
+                'jpeg': 'mjpeg - Motion JPEG encoder', # or libjpeg
                 'h264': 'libx264 - H.264 encoder',
                 'hevc': 'libx265 - H.265/HEVC encoder',
                 'aac': 'aac - AAC encoder',
                 'flac': 'flac - FLAC encoder',
-                'mp3': 'libmp3lame - MP3 encoder'
+                'mp3': 'libmp3lame - MP3 encoder',
+                'opus': 'libopus - Opus encoder',
+                # Add other common fallbacks as needed
             }
-            if selected_codec in fallback_encoders:
-                compatible_local = [fallback_encoders[selected_codec]]
+            if codec_to_use in fallback_encoders:
+                compatible_local = [fallback_encoders[codec_to_use]]
 
         # 2. Encodeurs matériels distants
-        remote_encoders: list[str] = []
-        connected_servers = self.distributed_client.get_connected_servers()
-        for server in connected_servers:
-            if getattr(server, 'status', None) == 'online':
-                hw_list = server.capabilities.hardware_encoders.get('all', []) if server.capabilities else []
-                for hw in hw_list:
-                    if selected_codec in hw or (selected_codec == 'hevc' and '265' in hw):
-                        remote_encoders.append(f"{server.name}: {hw}")
+        remote_encoders_list: list[str] = [] # Renamed to avoid conflict
+        if self.distributed_client: # Ensure client exists
+            connected_servers = self.distributed_client.get_connected_servers()
+            for server in connected_servers:
+                # Ensure server status and capabilities are accessible
+                server_status_val = getattr(server.status, 'value', None) if hasattr(server, 'status') else None
+                if server_status_val == 'online' and hasattr(server, 'capabilities') and server.capabilities:
 
-        all_encoders = compatible_local + remote_encoders
+                    all_hw_encoders_on_server: List[str] = []
+                    if hasattr(server.capabilities, 'hardware_encoders') and server.capabilities.hardware_encoders:
+                        if isinstance(server.capabilities.hardware_encoders, dict):
+                            # e.g. {"nvidia": ["h264_nvenc"], "intel": ["h264_qsv"]}
+                            for enc_list_per_type in server.capabilities.hardware_encoders.values():
+                                if isinstance(enc_list_per_type, list):
+                                    all_hw_encoders_on_server.extend(enc_list_per_type)
+                        elif isinstance(server.capabilities.hardware_encoders, list):
+                            # e.g. ["h264_nvenc", "hevc_nvenc"]
+                            all_hw_encoders_on_server.extend(server.capabilities.hardware_encoders)
+
+                    for hw_enc_name in all_hw_encoders_on_server:
+                        # Basic compatibility check - this might need to be more robust,
+                        # potentially checking against FFmpeg's known codec <-> encoder mappings.
+                        # For now, simple string matching.
+                        if codec_to_use in hw_enc_name or \
+                           (codec_to_use == 'hevc' and ('h265' in hw_enc_name or 'hevc' in hw_enc_name)) or \
+                           (codec_to_use == 'av1' and 'av1' in hw_enc_name) or \
+                           (codec_to_use == 'h264' and ('h264' in hw_enc_name or 'avc' in hw_enc_name)):
+                            remote_encoders_list.append(f"{server.name}: {hw_enc_name}")
+
+        all_encoders = compatible_local + list(set(remote_encoders_list)) # list(set()) to remove duplicates
+
+        current_encoder_val = self.global_encoder_var.get() # Preserve current if valid
         self.global_encoder_combo['values'] = all_encoders
 
-        if all_encoders:
-            current = self.global_encoder_var.get()
-            if current not in all_encoders:
-                self.global_encoder_var.set(all_encoders[0])
+        if current_encoder_val and current_encoder_val in all_encoders:
+            self.global_encoder_var.set(current_encoder_val)
+        elif all_encoders:
+            self.global_encoder_var.set(all_encoders[0])
         else:
             self.global_encoder_var.set("")
 
-        # Mettre à jour les dépendances
-        self._update_container_choices()
-        self._update_quality_preset_controls()
+        # Orchestrating method will call subsequent updates like _update_container_choices and _update_quality_preset_controls.
 
-    def _update_quality_controls_for_global(self):
-        """Met à jour les contrôles de qualité en fonction du type de média et de l'encodeur sélectionné."""
-        media_type = self.global_type_var.get()
-        encoder = self._get_encoder_name_from_display(self.global_encoder_var.get())
-        codec = self.global_codec_var.get()
+    def _update_ui_for_media_type_and_settings(self, media_type: str, output_config: Optional[OutputConfig] = None, is_global_context: bool = False):
+        """
+        Orchestrates the update of the encoding settings UI based on the given media type
+        and specific output configuration OR global defaults.
+
+        Args:
+            media_type: The media type ("video", "audio", "image") to adapt the UI for.
+            output_config: The specific OutputConfig of a job to load settings from.
+                           If None, UI reflects global defaults for the media_type.
+            is_global_context: True if this update is for global settings (e.g. user changed main media type dropdown),
+                               False if for a specific job selected in the job combobox.
+        """
+        self.logger.info(f"Updating UI. Media Type: {media_type}, Job Config: {'Provided' if output_config else 'None'}, Global Context: {is_global_context}")
+
+        # 0. If this is a global context change, ensure AppState reflects the new global media type
+        #    and its associated blank codec/encoder values.
+        if is_global_context:
+            self.global_type_var.set(self.state.global_media_type) # Should match 'media_type' arg
+            self.global_codec_var.set(self.state.global_codec)     # Will be blank from AppState
+            self.global_encoder_var.set(self.state.global_encoder) # Will be blank from AppState
+            self.container_var.set(self.state.global_container)   # Will be blank from AppState
+
+            temp_encoder_for_defaults = self.state.global_encoder
+            self.quality_var.set(self._get_optimal_quality_for_codec(temp_encoder_for_defaults, media_type))
+            self.bitrate_var.set(self._get_optimal_quality_for_codec(temp_encoder_for_defaults, media_type, mode="bitrate"))
+            self.preset_var.set("medium")
+            self.video_mode_var.set("quality")
+            self.custom_flags_var.set("")
+
+            self.resolution_var_settings.set(self.state.settings.ui.default_resolution or "Keep Original")
+            self.crop_top_var.set("0"); self.crop_bottom_var.set("0"); self.crop_left_var.set("0"); self.crop_right_var.set("0")
+            self.preserve_hdr_var.set(True); self.tonemap_var.set(False); self.tonemap_method_var.set("hable")
+            self.subtitle_mode_var.set("copy"); self.subtitle_path_var.set("")
+            self.lut_path_var.set(""); self.watermark_path_var.set("")
+            self.watermark_position_var.set("top_right"); self.watermark_scale_var.set(0.1)
+            self.watermark_opacity_var.set(1.0); self.watermark_padding_var.set(10)
+
+        # 1. Update visibility of UI sections based on media_type
+        self._update_media_type_ui(media_type)
+
+        # 2. Update codec choices based on media_type. This will also set self.global_codec_var.
+        self._update_codec_choices(for_media_type=media_type)
+
+        # 3. If a specific job's output_config is provided, load its settings into UI variables
+        if output_config and not is_global_context:
+            self.logger.debug(f"Loading settings from provided output_config for job: {getattr(output_config, 'name', 'N/A')}")
+
+            job_codec = getattr(output_config, 'codec', '')
+            if not job_codec and output_config.encoder:
+                encoder_name_lower = output_config.encoder.lower()
+                if "264" in encoder_name_lower or "avc" in encoder_name_lower: job_codec = "h264"
+                elif "265" in encoder_name_lower or "hevc" in encoder_name_lower: job_codec = "hevc"
+                elif "vp9" in encoder_name_lower: job_codec = "vp9"
+                elif "av1" in encoder_name_lower: job_codec = "av1"
+                elif "aac" in encoder_name_lower: job_codec = "aac"
+                elif "mp3" in encoder_name_lower: job_codec = "mp3"
+                elif "flac" in encoder_name_lower: job_codec = "flac"
+                elif "opus" in encoder_name_lower: job_codec = "opus"
+                elif "webp" in encoder_name_lower: job_codec = "webp"
+                elif "png" in encoder_name_lower: job_codec = "png"
+                elif "jp" in encoder_name_lower: job_codec = "jpeg"
+                if not job_codec:
+                    available_codecs_for_type = FFmpegHelpers.available_codecs().get(media_type, [])
+                    for ac_known in available_codecs_for_type:
+                        if ac_known in encoder_name_lower: job_codec = ac_known; break
+            self.global_codec_var.set(job_codec if job_codec else "")
+
+            self._update_encoder_choices(for_media_type=media_type, codec=self.global_codec_var.get())
+
+            encoder_name = getattr(output_config, 'encoder', '')
+            encoder_display = ""
+            if encoder_name:
+                for item_value in self.global_encoder_combo['values']:
+                    if item_value.startswith(encoder_name): encoder_display = item_value; break
+            self.global_encoder_var.set(encoder_display or encoder_name)
+
+            self.container_var.set(getattr(output_config, 'container', ''))
+            self.video_mode_var.set(getattr(output_config, 'video_mode', 'quality'))
+
+            quality_val = getattr(output_config, 'quality', '')
+            if not quality_val and hasattr(output_config, 'cq_value'): quality_val = getattr(output_config, 'cq_value', '')
+            self.quality_var.set(str(quality_val))
+
+            self.bitrate_var.set(str(getattr(output_config, 'bitrate', '')))
+            self.multipass_var.set(getattr(output_config, 'multipass', False))
+            self.preset_var.set(getattr(output_config, 'preset', 'medium'))
+            self.custom_flags_var.set(getattr(output_config, 'custom_flags', ''))
+
+            self.resolution_var_settings.set(getattr(output_config, 'resolution', "Keep Original"))
+            crop_settings = getattr(output_config, 'crop', {})
+            self.crop_top_var.set(str(crop_settings.get("top", "0"))); self.crop_bottom_var.set(str(crop_settings.get("bottom", "0")))
+            self.crop_left_var.set(str(crop_settings.get("left", "0"))); self.crop_right_var.set(str(crop_settings.get("right", "0")))
+
+            self.preserve_hdr_var.set(getattr(output_config, 'preserve_hdr', True))
+            self.tonemap_var.set(getattr(output_config, 'tonemap', False))
+            self.tonemap_method_var.set(getattr(output_config, 'tonemap_method', "hable"))
+
+            self.subtitle_mode_var.set(getattr(output_config, 'subtitle_mode', "copy"))
+            self.subtitle_path_var.set(getattr(output_config, 'subtitle_path', ""))
+
+            self.lut_path_var.set(getattr(output_config, 'lut_path', ""))
+            watermark_cfg = getattr(output_config, 'watermark', {})
+            self.watermark_path_var.set(watermark_cfg.get('path', "")); self.watermark_position_var.set(watermark_cfg.get('position', "top_right"))
+            self.watermark_scale_var.set(float(watermark_cfg.get('scale', 0.1))); self.watermark_opacity_var.set(float(watermark_cfg.get('opacity', 1.0)))
+            self.watermark_padding_var.set(int(watermark_cfg.get('padding', 10)))
+        else:
+            self._update_encoder_choices(for_media_type=media_type, codec=self.global_codec_var.get())
+
+        self._update_container_choices(for_media_type=media_type)
+        self._update_quality_preset_controls(encoder=self.global_encoder_var.get())
+
+        effective_output_config_for_quality = output_config if output_config and not is_global_context else None
+        self._update_quality_controls_ui(media_type=media_type,
+                                         encoder=self.global_encoder_var.get(),
+                                         codec=self.global_codec_var.get(),
+                                         output_config=effective_output_config_for_quality)
+
+        self._on_video_mode_change()
+        self._on_tonemap_change()
+        self._on_subtitle_mode_change()
+        self._on_resolution_change()
+
+        self.logger.debug(f"UI Update complete. UI Vars: Type={self.global_type_var.get()}, Codec={self.global_codec_var.get()}, Enc={self.global_encoder_var.get()}, Cont={self.container_var.get()}")
+
+    def _update_quality_controls_ui(self, media_type: Optional[str] = None, encoder: Optional[str] = None, codec: Optional[str] = None, output_config: Optional[OutputConfig] = None):
+        """Met à jour les contrôles de qualité en fonction du type de média, de l'encodeur sélectionné et de la configuration existante."""
+        media_type_to_use = media_type if media_type is not None else self.global_type_var.get()
+        encoder_to_use = self._get_encoder_name_from_display(encoder if encoder is not None else self.global_encoder_var.get())
+        codec_to_use = codec if codec is not None else self.global_codec_var.get()
+        self.logger.debug(f"Updating quality controls UI for media: {media_type_to_use}, encoder: {encoder_to_use}, codec: {codec_to_use}")
+
+        # Default states for all controls in the quality frame
+        self.video_mode_radio_quality.config(state="disabled", text="Qualité (N/A)")
+        self.cq_entry.config(state="disabled")
+        self.video_mode_radio_bitrate.config(state="disabled", text="Bitrate (N/A)")
+        self.bitrate_entry.config(state="disabled")
+        self.multipass_check.config(state="disabled")
+        self.preset_label.grid_remove() # Hide by default
+        self.quality_entry.grid_remove() # Hide by default (this is the encoder preset combobox)
+
+        # Determine current settings from output_config or use optimal defaults
+        # output_config takes precedence if available for a specific job's settings
+        current_video_mode = getattr(output_config, 'video_mode', 'quality') if output_config else 'quality'
+
+        current_quality_val = None
+        if output_config:
+            current_quality_val = getattr(output_config, 'quality', None)
+            if current_quality_val is None and hasattr(output_config, 'cq_value'): # Legacy
+                 current_quality_val = getattr(output_config, 'cq_value', None)
+        if current_quality_val is None: # Fallback to optimal if not in output_config
+            current_quality_val = self._get_optimal_quality_for_codec(encoder_to_use, media_type_to_use, mode="quality")
+
+        current_bitrate_val = getattr(output_config, 'bitrate', None) if output_config else None
+        if current_bitrate_val is None: # Fallback to optimal
+            current_bitrate_val = self._get_optimal_quality_for_codec(encoder_to_use, media_type_to_use, mode="bitrate")
+
+        self.video_mode_var.set(current_video_mode)
+        self.quality_var.set(str(current_quality_val))
+        self.bitrate_var.set(str(current_bitrate_val))
+        if output_config:
+             self.multipass_var.set(getattr(output_config, 'multipass', False))
+             self.preset_var.set(getattr(output_config, 'preset', 'medium')) # Encoder preset
+        else: # Defaults for global context
+             self.multipass_var.set(False)
+             self.preset_var.set(self._get_optimal_quality_for_codec(encoder_to_use, media_type_to_use, mode="preset"))
+
+
+        if media_type_to_use == "video":
+            self.video_mode_radio_quality.config(state="normal")
+            self.video_mode_radio_bitrate.config(state="normal", text="Bitrate (kbps)")
+            self.multipass_check.config(state="normal")
+            self.preset_label.grid()
+            self.quality_entry.grid() # Show encoder preset combobox
+
+            # Set appropriate label for quality/CQ/CRF
+            if any(e in encoder_to_use for e in ['nvenc', 'qsv', 'amf', 'videotoolbox']):
+                self.video_mode_radio_quality.config(text="Qualité Cible (CQ/ICQ)")
+            else:
+                self.video_mode_radio_quality.config(text="Qualité Cible (CRF)")
+
+        elif media_type_to_use == "audio":
+            self.video_mode_radio_bitrate.config(state="normal", text="Bitrate (kbps)") # Always allow bitrate for audio
+
+            if 'flac' in encoder_to_use:
+                self.video_mode_radio_quality.config(text="Compression (0-12)", state="normal")
+                self.video_mode_radio_bitrate.config(state="disabled") # FLAC is lossless
+                self.bitrate_entry.config(state="disabled")
+                if not output_config: self.video_mode_var.set("quality") # Default to compression for FLAC
+            elif any(c in encoder_to_use for c in ['aac', 'libopus', 'libvorbis', 'libmp3lame']):
+                self.video_mode_radio_quality.config(text="Qualité VBR (varies)", state="normal")
+                # VBR quality scale depends on codec, e.g. LAME -V (0-9), Vorbis -q (0-10), fdk_aac -vbr (1-5)
+            else: # e.g., PCM like 'wav'
+                self.video_mode_radio_quality.config(text="Qualité (N/A)", state="disabled")
+                # Bitrate might still be relevant for PCM (e.g. sample_rate * bit_depth * channels) but not user-settable here usually
+                self.video_mode_radio_bitrate.config(state="disabled")
+                self.bitrate_entry.config(state="disabled")
+
+
+        elif media_type_to_use == "image":
+            self.video_mode_radio_quality.config(state="normal") # Quality mode is primary
+            if not output_config: self.video_mode_var.set("quality")
+
+            q_text = "Qualité (0-100)" # Generic default
+            if 'webp' in encoder_to_use: q_text = "WebP Qualité (0-100)"
+            elif 'avif' in encoder_to_use: q_text = "AVIF Qualité (CQ 0-63)"
+            elif 'jpeg' in encoder_to_use or 'mjpeg' in encoder_to_use : q_text = "JPEG Qualité (1-100)"
+            elif 'jpegxl' in encoder_to_use or 'jxl' in encoder_to_use: q_text = "JXL Distance (0-15)"
+            elif 'heic' in encoder_to_use: q_text = "HEIC Qualité (CRF 0-51)"
+            elif 'png' in encoder_to_use: q_text = "PNG Compression (0-100)"
+            self.video_mode_radio_quality.config(text=q_text)
         
-        # Mise à jour des labels et plages selon le codec/encodeur
-        optimal_quality = self._get_optimal_quality_for_codec(encoder, media_type)
-        
-        if media_type == "image":
-            if 'webp' in encoder.lower():
-                # WebP: qualité 0-100 (100 = lossless)
-                self.video_mode_radio_quality.config(text="Qualité WebP (0-100, 100=lossless)")
-                self.quality_var.set(optimal_quality)
-                self.cq_entry.config(state="normal")
-                self.video_mode_radio_bitrate.config(state="disabled")
-                self.bitrate_entry.config(state="disabled")
-            elif 'avif' in encoder.lower():
-                # AVIF: CRF 0-63
-                self.video_mode_radio_quality.config(text="Qualité AVIF (CRF 0-63)")
-                self.quality_var.set(optimal_quality)
-                self.cq_entry.config(state="normal")
-            elif 'jpeg' in encoder.lower():
-                # JPEG: qualité 1-100
-                self.video_mode_radio_quality.config(text="Qualité JPEG (1-100)")
-                self.quality_var.set(optimal_quality)
-                self.cq_entry.config(state="normal")
-            elif 'jpegxl' in encoder.lower() or 'jxl' in encoder.lower():
-                # JPEGXL: distance 0.0-15.0 (0.0=lossless, 1.0=très bonne qualité)
-                self.video_mode_radio_quality.config(text="Distance JPEGXL (0.0-15.0, 0.0=lossless)")
-                self.quality_var.set(optimal_quality)
-                self.cq_entry.config(state="normal")
-                self.video_mode_radio_bitrate.config(state="disabled")
-                self.bitrate_entry.config(state="disabled")
-            elif 'heic' in encoder.lower():
-                # HEIC: CRF 0-51 (comme HEVC)
-                self.video_mode_radio_quality.config(text="Qualité HEIC (CRF 0-51)")
-                self.quality_var.set(optimal_quality)
-                self.cq_entry.config(state="normal")
-                self.video_mode_radio_bitrate.config(state="disabled")
-                self.bitrate_entry.config(state="disabled")
-            else:
-                # PNG et autres : pas de contrôle qualité
-                self.video_mode_radio_quality.config(text="Qualité (N/A pour PNG)")
-                self.cq_entry.config(state="disabled")
-                self.video_mode_radio_bitrate.config(state="disabled")
-                
-        elif media_type == "audio":
-            if 'flac' in encoder.lower():
-                # FLAC: niveau compression 0-12
-                self.video_mode_radio_quality.config(text="Niveau Compression FLAC (0-12)")
-                self.quality_var.set(optimal_quality)
-                self.cq_entry.config(state="normal")
-                self.video_mode_radio_bitrate.config(state="disabled")
-                self.bitrate_entry.config(state="disabled")
-            elif 'alac' in encoder.lower() or 'wav' in encoder.lower():
-                # Codecs lossless : pas de contrôle qualité
-                self.video_mode_radio_quality.config(text="Lossless (pas de paramètres)")
-                self.cq_entry.config(state="disabled")
-                self.video_mode_radio_bitrate.config(state="disabled")
-            else:
-                # AAC, MP3, Opus : bitrate
-                self.video_mode_radio_quality.config(text="Qualité Variable (VBR)")
-                self.video_mode_radio_bitrate.config(text="Bitrate Constant (CBR)")
-                self.video_mode_radio_bitrate.config(state="normal")
-                self.bitrate_var.set(optimal_quality)
-                
-        elif media_type == "video":
-            # Conserver le comportement existant pour la vidéo
-            if 'nvenc' in encoder or 'qsv' in encoder or 'amf' in encoder or 'videotoolbox' in encoder:
-                self.video_mode_radio_quality.config(text="Qualité Constante (CQ)")
-            else:
-                self.video_mode_radio_quality.config(text="Qualité Constante (CRF)")
-            self.quality_var.set(optimal_quality)
-                
-        # Déclencher la mise à jour de l'état des contrôles
+        # This call will enable/disable the actual entry fields based on the radio button selection
         self._on_video_mode_change()
 
-    def _get_optimal_quality_for_codec(self, encoder: str, media_type: str) -> str:
-        """Retourne une valeur de qualité optimale par défaut pour un encodeur donné."""
-        encoder_lower = encoder.lower()
-        
+    def _get_optimal_quality_for_codec(self, encoder: str, media_type: str, mode: str = "quality") -> str:
+        """Retourne une valeur de qualité/paramètre optimal par défaut pour un encodeur et un type de média."""
+        encoder_lower = encoder.lower() if encoder else "" # Handle empty encoder string
+
         if media_type == "video":
-            if 'x264' in encoder_lower or 'x265' in encoder_lower:
-                return "22"  # CRF optimal pour x264/x265
-            elif 'nvenc' in encoder_lower:
-                return "20"  # CQ optimal pour NVENC
-            elif 'qsv' in encoder_lower:
-                return "23"  # CQ optimal pour QuickSync
-            elif 'av1' in encoder_lower:
-                return "25"  # CRF optimal pour AV1
-            elif 'vp9' in encoder_lower:
-                return "28"  # CRF optimal pour VP9
-            return "22"  # Défaut général
-            
+            if mode == "bitrate": return "4000"
+            if any(e in encoder_lower for e in ['x264', 'libx264', 'x265', 'libx265']): return "22"
+            if any(e in encoder_lower for e in ['nvenc_h264', 'nvenc_hevc']): return "20" # NVIDIA CQ
+            if any(e in encoder_lower for e in ['h264_qsv', 'hevc_qsv']): return "23" # Intel QSV CQP/ICQ
+            if any(e in encoder_lower for e in ['h264_amf', 'hevc_amf']): return "23" # AMD AMF
+            if any(e in encoder_lower for e in ['h264_videotoolbox', 'hevc_videotoolbox']): return "75" # VT Quality 0-100
+            if 'libaom-av1' in encoder_lower or 'rav1e' in encoder_lower or 'svt_av1' in encoder_lower: return "30" # AV1 CRF (higher can be good)
+            if 'libvpx-vp9' in encoder_lower: return "32" # VP9 CRF
+            return "22" # General video fallback
+
         elif media_type == "audio":
-            if 'flac' in encoder_lower:
-                return "8"   # Niveau compression FLAC optimal (équilibre vitesse/taille)
-            elif 'aac' in encoder_lower:
-                return "128"  # Bitrate AAC optimal
-            elif 'mp3' in encoder_lower:
-                return "192"  # Bitrate MP3 optimal
-            elif 'opus' in encoder_lower:
-                return "128"  # Bitrate Opus optimal
-            return "128"  # Défaut général
-            
+            if 'flac' in encoder_lower: return "8" # FLAC compression level 0-12
+            if mode == "bitrate":
+                if 'aac' in encoder_lower: return "160"
+                if 'libmp3lame' in encoder_lower: return "192"
+                if 'libopus' in encoder_lower: return "128"
+                if 'libvorbis' in encoder_lower: return "160"
+                return "128" # Default bitrate for other audio
+            else: # VBR quality mode
+                if 'libmp3lame' in encoder_lower: return "2"  # LAME VBR quality -V 2
+                if 'libvorbis' in encoder_lower: return "6"   # Vorbis VBR quality -q:a 6
+                # For AAC (libfdk_aac), VBR is 1-5. For FFmpeg's internal aac, -q:a (e.g., 2 is good).
+                # Opus is best controlled by bitrate or specific flags; simple VBR quality number is less common.
+                # For simplicity, if not FLAC and not bitrate mode, might return empty or a general VBR indicator.
+                if 'aac' in encoder_lower : return "4" # Assuming a general VBR scale, e.g. for libfdk_aac
+                return "" # No simple VBR quality number for other codecs by default
+
         elif media_type == "image":
-            if 'webp' in encoder_lower:
-                return "90"   # Qualité WebP très bonne sans être lossless
-            elif 'avif' in encoder_lower:
-                return "23"   # CRF AVIF optimal
-            elif 'jpeg' in encoder_lower:
-                return "85"   # Qualité JPEG très bonne
-            elif 'jpegxl' in encoder_lower or 'jxl' in encoder_lower:
-                return "1.0"  # Distance JPEGXL très bonne qualité
-            elif 'heic' in encoder_lower:
-                return "23"   # CRF HEIC optimal (comme HEVC)
-            return "90"   # Défaut général
-            
-        return "22"  # Défaut global
+            # Quality mode is primary for images
+            if 'libwebp' in encoder_lower: return "90"  # WebP quality 0-100 (100 can be lossless-ish)
+            if 'libavif' in encoder_lower or 'avif' in encoder_lower : return "25"  # AVIF CQ for libaom (0-63, lower is better)
+            if 'jpeg' in encoder_lower or 'mjpeg' in encoder_lower: return "85" # JPEG quality (often 1-100 or qscale 2-31)
+            if 'libjpegxl' in encoder_lower or 'jxl' in encoder_lower: return "1.0" # JXL distance (0-15, lower is better, 0=lossless)
+            if 'heic' in encoder_lower or 'libheif' in encoder_lower : return "28" # HEIC CRF (like HEVC)
+            if 'png' in encoder_lower: return "90" # FFmpeg's -compression_level 0-100.
+            return "85" # General image quality fallback
+
+        return "22" # Overall fallback, should ideally not be reached if types are handled.
 
     def _on_ui_setting_changed(self, *args):
         """
-        Callback appelé quand les paramètres d'interface changent.
-        Synchronise les valeurs avec l'état global de l'application.
+        Callback appelé quand les paramètres d'interface (StringVar, BooleanVar, etc. for encoding settings) changent.
+        Si in global context (no specific job selected for settings), it synchronises these UI values
+        with the AppState's global encoding settings.
         """
+        # Determine if a specific job is selected for configuration
+        is_job_specific_context = bool(self.selected_job_for_settings_var.get())
+
+        if is_job_specific_context:
+            # Changes are for the selected job, not global defaults.
+            # These changes are staged in the UI vars. Applying them to the actual job object
+            # typically happens via an "Apply" button or when the job is processed.
+            self.logger.debug("UI setting changed in job-specific context. No AppState.global_settings update.")
+            return
+
+        # If here, no specific job is selected, so changes affect global AppState defaults.
+        self.logger.debug("UI setting changed in global context. Updating AppState global encoding settings.")
         try:
-            # Récupérer les valeurs actuelles de l'interface
             updates = {}
+            # Collect all relevant global settings from their UI variables
+            # Note: global_type_var change is handled by _on_media_type_change directly updating controller/appstate.
+            # We only need to sync settings that are *downstream* of media type.
+
+            # if hasattr(self, 'global_type_var'): # This should reflect AppState.global_media_type
+            #     updates['media_type'] = self.global_type_var.get() # Usually not needed here due to _on_media_type_change
             
-            if hasattr(self, 'global_type_var'):
-                updates['media_type'] = self.global_type_var.get()
-            if hasattr(self, 'global_codec_var'):
+            if hasattr(self, 'global_codec_var') and self.global_codec_var.get() != self.state.global_codec:
                 updates['codec'] = self.global_codec_var.get()
-            if hasattr(self, 'global_encoder_var'):
-                updates['encoder'] = self.global_encoder_var.get()
-            if hasattr(self, 'container_var'):
+            if hasattr(self, 'global_encoder_var') and self.global_encoder_var.get() != self.state.global_encoder:
+                updates['encoder'] = self._get_encoder_name_from_display(self.global_encoder_var.get()) # Store short name
+            if hasattr(self, 'container_var') and self.container_var.get() != self.state.global_container:
                 updates['container'] = self.container_var.get()
-            if hasattr(self, 'quality_var'):
-                updates['quality'] = self.quality_var.get()
-            if hasattr(self, 'preset_var'):
+
+            # Quality related settings - these depend on video_mode_var
+            current_video_mode = self.video_mode_var.get() # quality or bitrate
+            if current_video_mode == "quality":
+                if hasattr(self, 'quality_var') and self.quality_var.get() != self.state.global_quality:
+                     updates['quality'] = self.quality_var.get()
+                # When in quality mode, bitrate in AppState might be nulled or kept, depends on desired behavior
+                # updates['bitrate'] = "" # Or some indicator that it's not active
+            elif current_video_mode == "bitrate":
+                if hasattr(self, 'bitrate_var') and self.bitrate_var.get() != self.state.global_bitrate:
+                    updates['bitrate'] = self.bitrate_var.get()
+                # updates['quality'] = "" # Or some indicator
+
+            if hasattr(self, 'preset_var') and self.preset_var.get() != self.state.global_preset: # This is encoder preset
                 updates['preset'] = self.preset_var.get()
-            if hasattr(self, 'bitrate_var'):
-                updates['bitrate'] = self.bitrate_var.get()
-            if hasattr(self, 'multipass_var'):
+            if hasattr(self, 'multipass_var') and self.multipass_var.get() != self.state.global_multipass:
                 updates['multipass'] = self.multipass_var.get()
-            
-            # Mettre à jour l'état global
-            self.state.update_global_encoding_settings(**updates)
+
+            if updates: # Only update if there are actual changes to global settings
+                self.logger.info(f"Pushing UI changes to AppState global settings: {updates}")
+                self.state.update_global_encoding_settings(**updates)
+            else:
+                self.logger.debug("No actual changes in UI to push to AppState global settings.")
             
         except Exception as e:
-            self.logger.error(f"Erreur lors de la synchronisation des paramètres: {e}")
+            self.logger.error(f"Erreur lors de la synchronisation des paramètres globaux via _on_ui_setting_changed: {e}", exc_info=True)
