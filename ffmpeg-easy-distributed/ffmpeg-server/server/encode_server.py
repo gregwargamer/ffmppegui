@@ -34,9 +34,13 @@ class EncodeServer:
         self.jobs_failed = 0
         
         self.logger = logging.getLogger(__name__)
+
+        self._stopping = False
+        self.websocket_server = None
+        self.maintenance_task = None
     
     async def start(self):
-        """Démarre le serveur WebSocket"""
+        """Démarre le serveur WebSocket sans bloquer."""
         self.logger.info(f"🚀 Serveur démarré - ID: {self.server_id}")
         self.logger.info(f"📊 Capacités détectées:")
         self.logger.info(f"   - CPU: {self.capabilities.cpu_cores} cœurs")
@@ -44,35 +48,51 @@ class EncodeServer:
         self.logger.info(f"   - Encodeurs SW: {len(self.capabilities.software_encoders)}")
         self.logger.info(f"   - Encodeurs HW: {sum(len(v) for v in self.capabilities.hardware_encoders.values())}")
         
-        # Créer un wrapper pour gérer la signature
-        async def handler(websocket):
-            await self.handle_client(websocket, None)
-        
-        async with websockets.serve(
-            handler, 
+        self.websocket_server = await websockets.serve(
+            self.handle_client, 
             self.config.host, 
             self.config.port,
             ping_interval=20,
             ping_timeout=10
-        ):
-            maintenance_task = asyncio.create_task(self.maintenance_loop())
-            try:
-                await asyncio.Future()
-            finally:
-                maintenance_task.cancel()
+        )
+        self.maintenance_task = asyncio.create_task(self.maintenance_loop())
     
     async def stop(self):
-        """Arrête proprement le serveur"""
+        """Arrête proprement le serveur."""
+        if self._stopping:
+            return
+        self._stopping = True
+
         self.logger.info("🛑 Arrêt du serveur en cours...")
         self.status = ServerStatus.MAINTENANCE
         
-        for job_id, processor in self.active_jobs.items():
-            self.logger.info(f"⏹️  Annulation job {job_id}")
-            await processor.cancel()
+        # Annuler la tâche de maintenance
+        if self.maintenance_task:
+            self.maintenance_task.cancel()
+
+        # Fermer les connexions client existantes
+        if self.clients:
+            self.logger.info(f"Fermeture de {len(self.clients)} connexions client...")
+            client_close_tasks = [
+                client.close(code=1001, reason="Server shutting down")
+                for client in self.clients.values()
+            ]
+            await asyncio.wait(client_close_tasks, timeout=5)
+
+        # Annuler les jobs actifs
+        if self.active_jobs:
+            self.logger.info(f"Annulation de {len(self.active_jobs)} jobs actifs...")
+            job_cancel_tasks = [
+                processor.cancel() for processor in self.active_jobs.values()
+            ]
+            await asyncio.wait(job_cancel_tasks, timeout=10)
         
-        for client_id, websocket in self.clients.items():
-            await websocket.close()
-        
+        # Arrêter le serveur websocket
+        if self.websocket_server:
+            self.websocket_server.close()
+            await self.websocket_server.wait_closed()
+            self.logger.info("Serveur WebSocket arrêté.")
+
         self.logger.info("✅ Serveur arrêté proprement")
     
     async def handle_client(self, websocket, path=None):
@@ -310,14 +330,27 @@ class EncodeServer:
         self.logger.info(f"🎉 Job terminé: {job_id} ({result.status.value})")
     
     async def maintenance_loop(self):
+        """Boucle de maintenance pour les tâches périodiques."""
         while True:
+            await asyncio.sleep(30) # Exécuter toutes les 30 secondes
             try:
-                await asyncio.sleep(60)
+                # Mettre à jour la charge CPU
                 self.capabilities.current_load = psutil.cpu_percent(interval=1) / 100.0
+                
+                # Nettoyer les anciens fichiers temporaires
                 await self.file_manager.cleanup_old_files()
-                self.logger.debug(f"📊 Statut: {len(self.active_jobs)}/{self.config.max_jobs} jobs, {len(self.clients)} clients, charge CPU: {self.capabilities.current_load:.1%}")
+                
+                self.logger.debug(
+                    f"Tâches de maintenance exécutées. "
+                    f"Charge CPU: {self.capabilities.current_load:.1%}, "
+                    f"Clients: {len(self.clients)}, Jobs: {len(self.active_jobs)}"
+                )
+            except asyncio.CancelledError:
+                self.logger.info("Boucle de maintenance annulée, arrêt en cours.")
+                break
             except Exception as e:
-                self.logger.error(f"❌ Erreur maintenance: {e}")
+                self.logger.error(f"❌ Erreur inattendue dans la boucle de maintenance: {e}", exc_info=True)
+                # On continue la boucle même en cas d'erreur sur une itération.
 
     async def handle_file_upload_start(self, websocket, message: Message):
         job_id = message.data.get('job_id')

@@ -967,17 +967,19 @@ class MainWindow:
         return "unknown"
 
     def _open_settings(self):
-        SettingsWindow(self.root, self.settings, self.loop, self.run_async_func) # Pass settings, loop, and run_async
+        SettingsWindow(self.root, self.settings, self._update_codec_choices, self._update_preset_list)
 
     def _on_double_click(self, event):
-        item_id = self.tree.identify("item", event.x, event.y)
-        if item_id:
-            job = next((j for j in self.jobs if str(id(j)) == item_id), None)
-            if job:
-                JobEditWindow(self.root, job)
+        item_id = self.tree.identify_row(event.y)
+        if not item_id:
+            return
+        
+        job = next((j for j in self.jobs if j.src_path.name == item_id), None)
+        if job:
+            JobEditWindow(self.root, job, self.distributed_client)
 
     def _select_input_folder(self):
-        folder = filedialog.askdirectory(title="Select input folder")
+        folder = filedialog.askdirectory(title="Sélectionner un dossier d'entrée")
         if folder:
             self.input_folder.set(folder)
             self._auto_import_from_folder(folder)

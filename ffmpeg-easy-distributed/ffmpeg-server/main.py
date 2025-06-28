@@ -34,12 +34,14 @@ def setup_logging(log_level: str, log_file: str = None):
         handlers=handlers
     )
 
-def signal_handler(server: EncodeServer):
-    """Gestionnaire de signaux pour arrêt propre"""
-    def handler(signum, frame):
-        logging.info(f"🛑 Signal {signum} reçu, arrêt du serveur...")
-        asyncio.create_task(server.stop())
-    return handler
+async def shutdown(server: EncodeServer, shutdown_event: asyncio.Event):
+    """Coroutine pour gérer l'arrêt propre."""
+    if server._stopping:
+        return
+    logging.info("Démarrage de la séquence d'arrêt...")
+    await server.stop()
+    shutdown_event.set()
+    logging.info("Séquence d'arrêt terminée. Le programme va se fermer.")
 
 async def main():
     """Point d'entrée principal"""
@@ -63,54 +65,67 @@ async def main():
     
     config = ServerConfig.from_args(args)
     
-    if args.validate_config:
-        logging.info("✅ Configuration valide")
-        return 0
-    
-    if args.test_capabilities:
-        logging.info("🔍 Test des capacités du serveur...")
-        capabilities = detect_capabilities()
+    if args.validate_config or args.test_capabilities:
+        if args.validate_config:
+            logging.info("✅ Configuration valide")
+            return 0
         
-        print("\n" + "="*60)
-        print("CAPACITÉS DU SERVEUR")
-        print("="*60)
-        print(f"Hostname: {capabilities.hostname}")
-        print(f"OS: {capabilities.os}")
-        print(f"CPU: {capabilities.cpu_cores} cœurs")
-        print(f"RAM: {capabilities.memory_gb} GB")
-        print(f"Disque: {capabilities.disk_space_gb} GB libre")
-        print(f"Performance: {capabilities.estimated_performance:.1f}")
-        print(f"\nEncodeurs logiciels ({len(capabilities.software_encoders)}):")
-        for encoder in capabilities.software_encoders:
-            print(f"  ✓ {encoder}")
-        print(f"\nEncodeurs matériels:")
-        for vendor, encoders in capabilities.hardware_encoders.items():
-            if encoders:
-                print(f"  {vendor.upper()}: {', '.join(encoders)}")
-        print(f"\nRésolution max: {capabilities.max_resolution}")
-        print(f"Formats supportés: {len(capabilities.supported_formats)}")
-        print("="*60)
-        
-        return 0
+        if args.test_capabilities:
+            logging.info("🔍 Test des capacités du serveur...")
+            capabilities = detect_capabilities()
+            
+            print("\n" + "="*60)
+            print("CAPACITÉS DU SERVEUR")
+            print("="*60)
+            print(f"Hostname: {capabilities.hostname}")
+            print(f"OS: {capabilities.os}")
+            print(f"CPU: {capabilities.cpu_cores} cœurs")
+            print(f"RAM: {capabilities.memory_gb} GB")
+            print(f"Disque: {capabilities.disk_space_gb} GB libre")
+            print(f"Performance: {capabilities.estimated_performance:.1f}")
+            print(f"\nEncodeurs logiciels ({len(capabilities.software_encoders)}):")
+            for encoder in capabilities.software_encoders:
+                print(f"  ✓ {encoder}")
+            print(f"\nEncodeurs matériels:")
+            for vendor, encoders in capabilities.hardware_encoders.items():
+                if encoders:
+                    print(f"  {vendor.upper()}: {', '.join(encoders)}")
+            print(f"\nRésolution max: {capabilities.max_resolution}")
+            print(f"Formats supportés: {len(capabilities.supported_formats)}")
+            print("="*60)
+            
+            return 0
+
+    server = EncodeServer(config)
+    shutdown_event = asyncio.Event()
+
+    def signal_handler(signum, frame):
+        """Gestionnaire de signaux qui déclenche la coroutine d'arrêt."""
+        logging.info(f"🛑 Signal {signum} reçu, déclenchement de l'arrêt...")
+        asyncio.create_task(shutdown(server, shutdown_event))
+
+    for sig in [signal.SIGINT, signal.SIGTERM]:
+        signal.signal(sig, signal_handler)
     
     try:
-        server = EncodeServer(config)
-        
-        for sig in [signal.SIGINT, signal.SIGTERM]:
-            signal.signal(sig, signal_handler(server))
-        
-        logging.info("🚀 Démarrage du serveur FFmpeg Easy...")
+        await server.start()
+        logging.info("🚀 Serveur démarré et en écoute...")
         logging.info(f"📍 Écoute sur {args.host}:{args.port}")
         logging.info(f"⚙️  Jobs max: {args.max_jobs}")
+        logging.info("Attente du signal d'arrêt (Ctrl+C)...")
+        await shutdown_event.wait()
         
-        await server.start()
-        
-    except KeyboardInterrupt:
-        logging.info("🛑 Arrêt demandé par l'utilisateur")
-        return 0
     except Exception as e:
-        logging.error(f"❌ Erreur fatale: {e}")
+        logging.error(f"❌ Erreur fatale non gérée dans main: {e}", exc_info=True)
         return 1
+    finally:
+        logging.info("Nettoyage final et fermeture.")
 
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    try:
+        asyncio.run(main())
+        sys.exit(0)
+    except KeyboardInterrupt:
+        # Ceci est juste une sécurité au cas où le signal n'est pas bien géré plus haut
+        print("Arrêt forcé.")
+        sys.exit(1)

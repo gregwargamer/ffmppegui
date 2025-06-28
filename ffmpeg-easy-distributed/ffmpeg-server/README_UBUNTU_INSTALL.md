@@ -268,4 +268,8 @@ Pour toute question ou problème :
 
 ---
 
-**Note** : Ce serveur est conçu pour fonctionner en réseau local ou avec un accès sécurisé. Ne l'exposez pas directement sur Internet sans mesures de sécurité appropriées. 
+**Note** : Ce serveur est conçu pour fonctionner en réseau local ou avec un accès sécurisé. Ne l'exposez pas directement sur Internet sans mesures de sécurité appropriées.
+
+```bash
+dmesg | tail -n 20
+``` 

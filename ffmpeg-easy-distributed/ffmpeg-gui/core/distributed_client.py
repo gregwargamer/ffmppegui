@@ -52,8 +52,8 @@ class DistributedClient:
                 server_info = ServerInfo(
                     server_id=response.data['server_id'],
                     name=response.data['name'],
-                    ip=response.data['ip'],
-                    port=response.data['port'],
+                    ip=ip,
+                    port=port,
                     status=ServerStatus(response.data['status']),
                     capabilities=capabilities,
                     max_jobs=response.data['max_jobs'],
@@ -124,8 +124,8 @@ class DistributedClient:
                     server_info = ServerInfo(
                         server_id=response.data['server_id'],
                         name=response.data['name'],
-                        ip=response.data['ip'],
-                        port=response.data['port'],
+                        ip=ip,
+                        port=port,
                         status=ServerStatus(response.data['status']),
                         capabilities=capabilities,
                         max_jobs=response.data['max_jobs'],
@@ -152,6 +152,8 @@ class DistributedClient:
         self.logger.debug(f"Message reçu de {uri}: {message.type.value}")
 
         if message.type == MessageType.SERVER_INFO:
+            ip, port_str = uri.replace("ws://", "").split(":")
+            port = int(port_str)
             # Créer l'objet ServerCapabilities à partir du dictionnaire
             caps_data = message.data['capabilities']
             capabilities = ServerCapabilities(**caps_data)
@@ -160,8 +162,8 @@ class DistributedClient:
             server_info = ServerInfo(
                 server_id=message.data['server_id'],
                 name=message.data['name'],
-                ip=message.data['ip'],
-                port=message.data['port'],
+                ip=ip,
+                port=port,
                 status=ServerStatus(message.data['status']),  # Convertir string en enum
                 capabilities=capabilities,
                 max_jobs=message.data['max_jobs'],

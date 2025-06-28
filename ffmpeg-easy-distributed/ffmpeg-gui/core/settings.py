@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Any
 import json
 from pathlib import Path
@@ -49,6 +49,6 @@ def load_settings(file_path: Path = Path("settings.json")) -> Settings:
 def save_settings(settings: Settings, file_path: Path = Path("settings.json")):
     try:
         with open(file_path, 'w') as f:
-            json.dump(settings.__dict__, f, indent=4)
+            json.dump(asdict(settings), f, indent=4)
     except Exception as e:
         print(f"Error saving settings to {file_path}: {e}")

@@ -72,6 +72,11 @@ class EncodeJob:
 
         self.is_cancelled: bool = False # Cancellation applies to all outputs of this job
 
+    @property
+    def status(self) -> str:
+        """Property to get the overall status, for backward compatibility."""
+        return self.get_overall_status()
+
     def get_overall_status(self) -> str:
         if not self.outputs:
             return "pending" # Or "empty" / "misconfigured"

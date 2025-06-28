@@ -6,6 +6,7 @@ from dataclasses import dataclass, asdict, field
 from typing import Dict, Any, Optional, List, Union
 from enum import Enum
 import logging
+import websockets
 
 class MessageType(Enum):
     """Types de messages du protocole"""
@@ -113,13 +114,13 @@ async def send_message(websocket, message: Message) -> None:
 async def receive_message(websocket) -> Message:
     """Reçoit un message via WebSocket avec timeout"""
     try:
-        raw_message = await asyncio.wait_for(websocket.recv(), timeout=30.0)
+        raw_message = await websocket.recv()
         logging.debug(f"Message brut reçu: {raw_message}")
         message = Message.from_json(raw_message)
         logging.debug(f"Message reçu déserialisé: {message.type.value}")
         return message
-    except asyncio.TimeoutError:
-        raise ProtocolError("Message reception timeout")
+    except websockets.exceptions.ConnectionClosed:
+        raise
     except Exception as e:
-        logging.error(f"Erreur réception message: {e}")
+        logging.error(f"Erreur réception message: {e}", exc_info=True)
         raise ProtocolError(f"Failed to receive message: {e}")
