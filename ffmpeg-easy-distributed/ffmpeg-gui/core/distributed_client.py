@@ -6,7 +6,7 @@ from collections import deque
 import time
 
 from shared.protocol import Message, MessageType, send_message, receive_message, ProtocolError
-from shared.messages import ServerInfo, JobConfiguration, JobProgress, JobResult, ServerStatus
+from shared.messages import ServerInfo, ServerCapabilities, ServerStatus, JobConfiguration, JobProgress, JobResult, JobStatus
 from core.settings import Settings
 
 class DistributedClient:
@@ -39,7 +39,23 @@ class DistributedClient:
             # Attendre les informations du serveur
             response = await asyncio.wait_for(receive_message(websocket), timeout=5)
             if response.type == MessageType.SERVER_INFO:
-                server_info = ServerInfo(**response.data)
+                # Créer l'objet ServerCapabilities à partir du dictionnaire
+                caps_data = response.data['capabilities']
+                capabilities = ServerCapabilities(**caps_data)
+                
+                # Créer l'objet ServerInfo avec le bon status enum
+                server_info = ServerInfo(
+                    server_id=response.data['server_id'],
+                    name=response.data['name'],
+                    ip=response.data['ip'],
+                    port=response.data['port'],
+                    status=ServerStatus(response.data['status']),
+                    capabilities=capabilities,
+                    max_jobs=response.data['max_jobs'],
+                    current_jobs=response.data['current_jobs'],
+                    uptime=response.data['uptime'],
+                    last_seen=response.data['last_seen']
+                )
                 self.servers[server_info.server_id] = server_info
                 self.logger.info(f"Informations serveur reçues de {uri}: {server_info.name}")
                 asyncio.create_task(self._listen_to_server(uri, websocket))
@@ -90,7 +106,23 @@ class DistributedClient:
                 await send_message(websocket, hello_msg)
                 response = await asyncio.wait_for(receive_message(websocket), timeout=5)
                 if response.type == MessageType.SERVER_INFO:
-                    server_info = ServerInfo(**response.data)
+                    # Créer l'objet ServerCapabilities à partir du dictionnaire
+                    caps_data = response.data['capabilities']
+                    capabilities = ServerCapabilities(**caps_data)
+                    
+                    # Créer l'objet ServerInfo avec le bon status enum
+                    server_info = ServerInfo(
+                        server_id=response.data['server_id'],
+                        name=response.data['name'],
+                        ip=response.data['ip'],
+                        port=response.data['port'],
+                        status=ServerStatus(response.data['status']),
+                        capabilities=capabilities,
+                        max_jobs=response.data['max_jobs'],
+                        current_jobs=response.data['current_jobs'],
+                        uptime=response.data['uptime'],
+                        last_seen=response.data['last_seen']
+                    )
                     self.servers[server_info.server_id] = server_info
                     self.logger.info(f"Informations serveur mises à jour pour {uri}: {server_info.name}")
                     asyncio.create_task(self._listen_to_server(uri, websocket))
@@ -110,7 +142,23 @@ class DistributedClient:
         self.logger.debug(f"Message reçu de {uri}: {message.type.value}")
 
         if message.type == MessageType.SERVER_INFO:
-            server_info = ServerInfo(**message.data)
+            # Créer l'objet ServerCapabilities à partir du dictionnaire
+            caps_data = message.data['capabilities']
+            capabilities = ServerCapabilities(**caps_data)
+            
+            # Créer l'objet ServerInfo avec le bon status enum
+            server_info = ServerInfo(
+                server_id=message.data['server_id'],
+                name=message.data['name'],
+                ip=message.data['ip'],
+                port=message.data['port'],
+                status=ServerStatus(message.data['status']),  # Convertir string en enum
+                capabilities=capabilities,
+                max_jobs=message.data['max_jobs'],
+                current_jobs=message.data['current_jobs'],
+                uptime=message.data['uptime'],
+                last_seen=message.data['last_seen']
+            )
             self.servers[server_info.server_id] = server_info
             self.logger.info(f"Mise à jour infos serveur: {server_info.name} ({server_info.status.value})")
         
@@ -120,7 +168,18 @@ class DistributedClient:
                 await self.job_progress_callbacks[progress.job_id](progress)
         
         elif message.type == MessageType.JOB_COMPLETED or message.type == MessageType.JOB_FAILED:
-            result = JobResult(**message.data)
+            # Créer l'objet JobResult avec le bon status enum
+            result = JobResult(
+                job_id=message.data['job_id'],
+                status=JobStatus(message.data['status']),  # Convertir string en enum
+                output_file=message.data['output_file'],
+                file_size=message.data['file_size'],
+                duration=message.data['duration'],
+                average_fps=message.data['average_fps'],
+                error_message=message.data['error_message'],
+                server_id=message.data['server_id'],
+                completed_at=message.data['completed_at']
+            )
             if result.job_id in self.job_completion_callbacks:
                 await self.job_completion_callbacks[result.job_id](result)
             # Nettoyer les callbacks après complétion
@@ -161,7 +220,27 @@ class DistributedClient:
             self.job_progress_callbacks[job_config.job_id] = progress_callback
             self.job_completion_callbacks[job_config.job_id] = completion_callback
 
-            submit_msg = Message(MessageType.JOB_SUBMIT, job_config.__dict__)
+            # Convertir job_config en dictionnaire sérialisable
+            job_dict = {
+                'job_id': job_config.job_id,
+                'input_file': job_config.input_file,
+                'output_file': job_config.output_file,
+                'encoder': job_config.encoder,
+                'encoder_type': job_config.encoder_type.value if hasattr(job_config.encoder_type, 'value') else job_config.encoder_type,
+                'preset': job_config.preset,
+                'quality_mode': job_config.quality_mode,
+                'quality_value': job_config.quality_value,
+                'filters': job_config.filters,
+                'ffmpeg_args': job_config.ffmpeg_args,
+                'required_capabilities': job_config.required_capabilities,
+                'priority': job_config.priority,
+                'estimated_duration': job_config.estimated_duration,
+                'file_size': job_config.file_size,
+                'resolution': job_config.resolution,
+                'codec': job_config.codec,
+                'container': job_config.container
+            }
+            submit_msg = Message(MessageType.JOB_SUBMIT, job_dict)
             await send_message(websocket, submit_msg)
             self.logger.info(f"Job {job_config.job_id} soumis au serveur {server_id}")
             return True

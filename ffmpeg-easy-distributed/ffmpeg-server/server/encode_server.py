@@ -8,7 +8,7 @@ import psutil
 import time
 
 from shared.protocol import Message, MessageType, send_message, receive_message, ProtocolError
-from shared.messages import ServerInfo, ServerStatus, JobConfiguration, JobProgress, JobResult
+from shared.messages import ServerInfo, ServerStatus, JobConfiguration, JobProgress, JobResult, JobStatus
 from server.job_processor import JobProcessor
 from server.file_manager import FileManager
 from server.config_manager import ServerConfig
@@ -101,19 +101,36 @@ class EncodeServer:
     
     async def send_server_info(self, websocket):
         """Envoie les informations du serveur au client"""
-        server_info = ServerInfo(
-            server_id=self.server_id,
-            name=self.config.name or self.capabilities.hostname,
-            ip=self.config.host,
-            port=self.config.port,
-            status=self.status,
-            capabilities=self.capabilities,
-            max_jobs=self.config.max_jobs,
-            current_jobs=len(self.active_jobs),
-            uptime=time.time() - self.start_time,
-            last_seen=time.time()
-        )
-        message = Message(MessageType.SERVER_INFO, server_info.__dict__)
+        # Convertir les capacités en dictionnaire sérialisable
+        capabilities_dict = {
+            'hostname': self.capabilities.hostname,
+            'os': self.capabilities.os,
+            'cpu_cores': self.capabilities.cpu_cores,
+            'memory_gb': self.capabilities.memory_gb,
+            'disk_space_gb': self.capabilities.disk_space_gb,
+            'software_encoders': self.capabilities.software_encoders,
+            'hardware_encoders': self.capabilities.hardware_encoders,
+            'estimated_performance': self.capabilities.estimated_performance,
+            'current_load': self.capabilities.current_load,
+            'max_resolution': self.capabilities.max_resolution,
+            'supported_formats': self.capabilities.supported_formats,
+            'max_file_size_gb': self.capabilities.max_file_size_gb
+        }
+        
+        server_info_dict = {
+            'server_id': self.server_id,
+            'name': self.config.name or self.capabilities.hostname,
+            'ip': self.config.host,
+            'port': self.config.port,
+            'status': self.status.value,  # Convertir l'enum en string
+            'capabilities': capabilities_dict,
+            'max_jobs': self.config.max_jobs,
+            'current_jobs': len(self.active_jobs),
+            'uptime': time.time() - self.start_time,
+            'last_seen': time.time()
+        }
+        
+        message = Message(MessageType.SERVER_INFO, server_info_dict)
         await send_message(websocket, message)
     
     async def process_message(self, client_id: str, websocket, message: Message):
@@ -205,7 +222,19 @@ class EncodeServer:
     
     async def _on_job_progress(self, client_id: str, progress: JobProgress):
         if client_id in self.clients:
-            progress_msg = Message(MessageType.JOB_PROGRESS, progress.__dict__)
+            # Convertir l'objet progress en dictionnaire sérialisable
+            progress_dict = {
+                'job_id': progress.job_id,
+                'progress': progress.progress,
+                'current_frame': progress.current_frame,
+                'total_frames': progress.total_frames,
+                'fps': progress.fps,
+                'bitrate': progress.bitrate,
+                'speed': progress.speed,
+                'eta': progress.eta,
+                'server_id': progress.server_id
+            }
+            progress_msg = Message(MessageType.JOB_PROGRESS, progress_dict)
             await send_message(self.clients[client_id], progress_msg)
     
     async def _on_job_completion(self, client_id: str, result: JobResult):
@@ -219,7 +248,19 @@ class EncodeServer:
             self.jobs_failed += 1
         
         if client_id in self.clients:
-            completion_msg = Message(MessageType.JOB_COMPLETED, result.__dict__)
+            # Convertir l'objet result en dictionnaire sérialisable
+            result_dict = {
+                'job_id': result.job_id,
+                'status': result.status.value,  # Convertir l'enum en string
+                'output_file': result.output_file,
+                'file_size': result.file_size,
+                'duration': result.duration,
+                'average_fps': result.average_fps,
+                'error_message': result.error_message,
+                'server_id': result.server_id,
+                'completed_at': result.completed_at
+            }
+            completion_msg = Message(MessageType.JOB_COMPLETED, result_dict)
             await send_message(self.clients[client_id], completion_msg)
         
         self.logger.info(f"🎉 Job terminé: {job_id} ({result.status.value})")
