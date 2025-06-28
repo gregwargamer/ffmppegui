@@ -35,7 +35,7 @@ class FFmpegHelpers:
                             elif "jpegxl" in encoder_name or "jxl" in encoder_name: implemented_codec = "jpegxl"
                             elif "heic" in encoder_name or "hevc_image" in encoder_name: implemented_codec = "heic"
                             elif "aac" in encoder_name: implemented_codec = "aac"
-                            elif "mp3" in encoder_name: implemented_codec = "mp3lame"
+                            elif "mp3" in encoder_name: implemented_codec = "mp3" # Use "mp3" to match available_codecs
 
                         encoders.append({
                             "name": encoder_name,
@@ -57,6 +57,10 @@ class FFmpegHelpers:
                     {"name": "libmp3lame", "description": "MP3 (MPEG audio layer 3)", "codec": "mp3"},
                     {"name": "flac", "description": "FLAC (Free Lossless Audio Codec)", "codec": "flac"},
                     {"name": "opus", "description": "Opus", "codec": "opus"},
+                    {"name": "libvorbis", "description": "Vorbis", "codec": "vorbis"},
+                    {"name": "pcm_s16le", "description": "PCM signed 16-bit little-endian", "codec": "pcm_s16le"},
+                    {"name": "pcm_alaw", "description": "PCM A-law", "codec": "pcm_alaw"},
+                    {"name": "pcm_mulaw", "description": "PCM mu-law", "codec": "pcm_mulaw"},
                     # Image
                     {"name": "libwebp", "description": "WebP", "codec": "webp"},
                     {"name": "png", "description": "PNG (Portable Network Graphics) image", "codec": "png"},
