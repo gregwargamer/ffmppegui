@@ -111,7 +111,7 @@ class TransientInfoDialog(Toplevel):
             self.destroy()
 
 class MainWindow:
-    def __init__(self, root, distributed_client: DistributedClient, server_discovery: ServerDiscovery, job_scheduler: JobScheduler):
+    def __init__(self, root, distributed_client: DistributedClient, server_discovery: ServerDiscovery, job_scheduler: JobScheduler, loop, run_async_func):
         self.root = root
         self.root.title("FFmpeg Frontend")
         self.root.geometry("1200x800")
@@ -120,6 +120,8 @@ class MainWindow:
         self.server_discovery = server_discovery
         self.job_scheduler = job_scheduler
         self.settings = load_settings()
+        self.loop = loop
+        self.run_async_func = run_async_func
 
         self.server_discovery.register_server_update_callback(self.update_server_status)
 
@@ -697,7 +699,7 @@ class MainWindow:
         servers_menu.add_command(label="File d'Attente Distribuée", command=self.open_job_queue_window)
         servers_menu.add_command(label="Capacités Serveurs", command=self.open_capability_viewer_window)
         servers_menu.add_separator()
-        servers_menu.add_command(label="Test Connexions", command=lambda: asyncio.create_task(self.test_all_servers()))
+        servers_menu.add_command(label="Test Connexions", command=lambda: self.run_async_func(self.test_all_servers(), self.loop))
 
         settings_menu = Menu(self.menubar, tearoff=0)
         settings_menu.add_command(label="Preferences…", command=self._open_settings)
@@ -734,7 +736,7 @@ class MainWindow:
             self.servers_var.set(f"🟢 {connected_count} serveur(s) distant(s) + local - {total_jobs} jobs en cours")
 
     def open_server_manager(self):
-        ServerManagerWindow(self.root, self.server_discovery)
+        ServerManagerWindow(self.root, self.server_discovery, self.loop, self.run_async_func)
 
     def open_job_queue_window(self):
         JobQueueWindow(self.root, self.job_scheduler, self.server_discovery)
@@ -848,7 +850,7 @@ class MainWindow:
 
     def _enqueue_paths(self, paths: list[Path]):
         out_root = Path(self.output_folder.get()) if self.output_folder.get() and not self.output_folder.get().startswith("(no") else None
-        keep_structure = self.settings.data.get("keep_folder_structure", True)
+        keep_structure = self.settings.data.get("keep_folder_structure", True) # Changed Settings.data to self.settings.data
         input_folder = self.input_folder.get()
         
         current_batch_job_ids = []
@@ -965,7 +967,7 @@ class MainWindow:
         return "unknown"
 
     def _open_settings(self):
-        SettingsWindow(self.root)
+        SettingsWindow(self.root, self.settings, self.loop, self.run_async_func) # Pass settings, loop, and run_async
 
     def _on_double_click(self, event):
         item_id = self.tree.identify("item", event.x, event.y)
@@ -1025,7 +1027,11 @@ class MainWindow:
 
         for job in self.jobs:
             if job.get_overall_status() == "pending":
-                asyncio.create_task(self.job_scheduler.add_job(job, self._on_job_progress, self._on_job_completion))
+                # Use run_async_func to schedule the job addition
+                self.run_async_func(
+                    self.job_scheduler.add_job(job, self._on_job_progress, self._on_job_completion),
+                    self.loop
+                )
 
     def _on_job_progress(self, progress: JobProgress):
         job = next((j for j in self.jobs if j.job_id == progress.job_id), None)
@@ -1060,7 +1066,19 @@ class MainWindow:
         messagebox.showinfo("Non implémenté", "Fonctionnalité en cours de développement")
 
     def _manage_subtitles(self):
-        messagebox.showinfo("Non implémenté", "Fonctionnalité en cours de développement")
+        selected_items = self.tree.selection()
+        if not selected_items:
+            messagebox.showwarning("No Job Selected", "Please select a job from the queue to manage its subtitles.", parent=self.root)
+            return
+
+        item_id = selected_items[0] # Assuming single selection
+        job_data = self.job_rows.get(item_id)
+        if not job_data or "job" not in job_data:
+            messagebox.showerror("Error", "Could not find job data for the selected item.", parent=self.root)
+            return
+
+        selected_job = job_data["job"]
+        SubtitleManagementWindow(self.root, selected_job, self.settings) # Pass self.settings
 
     def _clear_queue(self):
         self.jobs.clear()

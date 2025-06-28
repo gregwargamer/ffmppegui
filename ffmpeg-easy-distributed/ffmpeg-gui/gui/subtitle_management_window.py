@@ -5,12 +5,14 @@ import json
 from pathlib import Path
 import threading
 
-from core.encode_job import EncodeJob # Assuming EncodeJob is accessible
+from core.encode_job import EncodeJob
+from core.settings import Settings # Import Settings for type hinting
 
 class SubtitleManagementWindow(tk.Toplevel):
-    def __init__(self, master, parent_job: EncodeJob):
+    def __init__(self, master, parent_job: EncodeJob, settings_instance: Settings): # Added settings_instance
         super().__init__(master)
         self.parent_job = parent_job
+        self.settings = settings_instance # Store settings instance
         self.title(f"Manage Subtitles for {parent_job.src_path.name}")
         self.geometry("600x400")
         self.transient(master)
@@ -159,8 +161,9 @@ class SubtitleManagementWindow(tk.Toplevel):
         # Determine output directory (use parent job's output dir if set, else source dir)
         # This assumes parent_job.outputs[0].dst_path is set.
         # A more robust way might be to use MainWindow's output_folder setting.
-        output_dir = Path(Settings.data.get("output_folder", self.parent_job.src_path.parent))
+        output_dir = Path(self.settings.data.get("output_folder", self.parent_job.src_path.parent)) # Use self.settings.data
         if hasattr(self.master, "output_folder") and self.master.output_folder.get() and not self.master.output_folder.get().startswith("No output"):
+            # If MainWindow instance is master and has output_folder attribute (less ideal, direct coupling)
             output_dir = Path(self.master.output_folder.get())
         elif self.parent_job.outputs and self.parent_job.outputs[0].dst_path:
              output_dir = self.parent_job.outputs[0].dst_path.parent
@@ -244,6 +247,12 @@ if __name__ == '__main__':
     # else:
     #    print(f"WARNING: Test file '{real_file_path}' not found. UI will be empty.")
 
+    # Create a dummy Settings instance for testing
+    class MockSettings:
+        def __init__(self):
+            self.data = {"output_folder": "test_output"} # Example, adjust as needed
 
-    app = SubtitleManagementWindow(root, parent_job=dummy_job)
+    dummy_settings = MockSettings()
+
+    app = SubtitleManagementWindow(root, parent_job=dummy_job, settings_instance=dummy_settings)
     root.mainloop()

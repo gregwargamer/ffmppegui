@@ -10,9 +10,11 @@ from shared.messages import ServerInfo, ServerStatus
 from core.server_discovery import ServerDiscovery
 
 class ServerManagerWindow:
-    def __init__(self, parent, server_discovery: ServerDiscovery):
+    def __init__(self, parent, server_discovery: ServerDiscovery, loop, run_async_func):
         self.parent = parent
         self.server_discovery = server_discovery
+        self.loop = loop
+        self.run_async_func = run_async_func
         self.servers: Dict[str, ServerInfo] = {}
         
         self.window = tk.Toplevel(parent)
@@ -26,7 +28,7 @@ class ServerManagerWindow:
         
         self.build_ui()
         self.server_discovery.register_server_update_callback(self.refresh_display)
-        asyncio.create_task(self._initial_load_servers())
+        self.run_async_func(self._initial_load_servers(), self.loop)
         
         # Mettre le focus sur le champ IP après construction de l'interface
         self.window.after(100, lambda: self.ip_entry.focus_set())
@@ -36,10 +38,13 @@ class ServerManagerWindow:
 
     async def _initial_load_servers(self):
         """Charge les serveurs connus au démarrage de la fenêtre."""
+        # This method is now called via run_async_func.
+        # get_all_servers is synchronous, call it directly.
         self.servers = self.server_discovery.get_all_servers()
         self.refresh_display(list(self.servers.values()))
-        # Lancer un refresh pour obtenir les statuts à jour
+        # refresh_servers is async and will be awaited.
         await self.refresh_servers()
+
 
     def build_ui(self):
         # Frame principal
@@ -94,9 +99,9 @@ class ServerManagerWindow:
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X, pady=(10, 0))
         
-        ttk.Button(button_frame, text="Actualiser", command=lambda: asyncio.create_task(self.refresh_servers())).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(button_frame, text="Supprimer", command=self.remove_server_action).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(button_frame, text="Test Ping", command=lambda: asyncio.create_task(self.ping_selected_servers())).pack(side=tk.LEFT)
+        ttk.Button(button_frame, text="Actualiser", command=lambda: self.run_async_func(self.refresh_servers(), self.loop)).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_frame, text="Supprimer", command=self.remove_server_action).pack(side=tk.LEFT, padx=(0, 5)) # remove_server_action will call run_async_func
+        ttk.Button(button_frame, text="Test Ping", command=lambda: self.run_async_func(self.ping_selected_servers(), self.loop)).pack(side=tk.LEFT)
 
     def add_server_action(self):
         """Action pour ajouter un serveur."""
@@ -111,7 +116,7 @@ class ServerManagerWindow:
             messagebox.showerror("Erreur", "IP requise")
             return
         
-        asyncio.create_task(self._add_server_and_update_ui(ip, port))
+        self.run_async_func(self._add_server_and_update_ui(ip, port), self.loop)
 
     async def _add_server_and_update_ui(self, ip: str, port: int):
         """Ajoute un serveur et met à jour l'UI."""
@@ -165,7 +170,7 @@ class ServerManagerWindow:
             return
         
         server_id = selection[0]
-        asyncio.create_task(self._remove_server_and_update_ui(server_id))
+        self.run_async_func(self._remove_server_and_update_ui(server_id), self.loop)
 
     async def _remove_server_and_update_ui(self, server_id: str):
         """Supprime un serveur et met à jour l'UI."""
