@@ -1,110 +1,151 @@
 # Copyright (c) 2025 Greg Oire
 # MIT License – see LICENSE file
 
-from tkinter import Tk
 import asyncio
 import logging
-import threading # Added threading
+import os
+import sys
+import tkinter as tk
+from tkinter import messagebox
 
-from core.settings import load_settings
-from gui.main_window import MainWindow
+# Ajouter le répertoire racine du projet au sys.path
+# Cela garantit que les importations de modules comme 'core' et 'shared' fonctionnent de manière fiable.
+project_root = os.path.dirname(os.path.abspath(__file__))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 from core.distributed_client import DistributedClient
+from core.local_server import LocalServer
 from core.server_discovery import ServerDiscovery
 from core.job_scheduler import JobScheduler
 from core.capability_matcher import CapabilityMatcher
+from core.settings import load_settings
+from gui.main_window import MainWindow
+from shared.settings_manager import SettingsManager
 
-try:
-    from tkinterdnd2 import TkinterDnD
-    DND_AVAILABLE = True
-except (ImportError, Exception):
-    # Gérer les erreurs tkinterdnd2 sur macOS beta
-    DND_AVAILABLE = False
 
-# Helper to run asyncio tasks from Tkinter
-def run_async(coro, loop):
-    """Helper to run an asyncio coroutine from a synchronous context (like Tkinter callbacks)"""
-    if loop and loop.is_running():
-        return asyncio.run_coroutine_threadsafe(coro, loop)
-    else:
-        logging.error("Asyncio loop is not available or not running.")
-        return None
-
-def main():
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
-    settings = load_settings()
+def setup_logging(settings):
+    """Configure le système de logging de l'application."""
+    log_level = settings.get("log_level", "INFO").upper()
+    log_file = settings.get("log_file", "ffmpeg_easy_gui.log")
     
-    # Setup asyncio loop to run in a separate thread
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    log_dir = os.path.dirname(log_file)
+    if log_dir and not os.path.exists(log_dir):
+        os.makedirs(log_dir, exist_ok=True)
 
-    # Initialisation des composants distribués
-    distributed_client = DistributedClient(settings) # loop is implicitly used by asyncio
-    server_discovery = ServerDiscovery(distributed_client, settings, loop=loop)
-    capability_matcher = CapabilityMatcher()
-    job_scheduler = JobScheduler(distributed_client, capability_matcher, loop=loop)
-
-
-    # Utiliser TkinterDnD si disponible pour le drag & drop
-    if DND_AVAILABLE:
-        try:
-            root = TkinterDnD.Tk()
-        except Exception as e:
-            logging.warning(f"Erreur avec TkinterDnD: {e}. Utilisation de Tk standard.")
-            root = Tk()
-    else:
-        root = Tk()
+    numeric_level = getattr(logging, log_level, logging.INFO)
     
-    root.geometry("1200x700")
-    root.minsize(800, 500)
-    
-    # Pass the loop and the run_async helper to the main application window
-    app = MainWindow(root, distributed_client, server_discovery, job_scheduler, loop, run_async)
-    
-    # Démarrer les tâches asynchrones initiales
-    async def start_initial_tasks():
-        await server_discovery.start_discovery()
-        await job_scheduler.start_scheduler()
+    root_logger = logging.getLogger()
+    if root_logger.hasHandlers():
+        root_logger.handlers.clear()
 
-    loop.create_task(start_initial_tasks()) # Schedule initial tasks
-
-    # Function to run the asyncio event loop
-    def run_loop():
-        try:
-            loop.run_forever()
-        finally:
-            loop.run_until_complete(loop.shutdown_asyncgens())
-            loop.close()
-
-    # Start the asyncio event loop in a new thread
-    async_thread = threading.Thread(target=run_loop, daemon=True)
-    async_thread.start()
+    log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    formatter = logging.Formatter(log_format)
 
     try:
-        root.mainloop()
-    except KeyboardInterrupt:
-        logging.info("Application interrupted by user.")
-    finally:
-        logging.info("Shutting down application...")
-        # Signal asyncio tasks to stop and wait for them
-        if loop.is_running():
-            # Schedule shutdown tasks in the loop
-            loop.call_soon_threadsafe(loop.create_task, job_scheduler.stop_scheduler())
-            loop.call_soon_threadsafe(loop.create_task, server_discovery.stop_discovery())
-            loop.call_soon_threadsafe(loop.create_task, distributed_client.shutdown())
+        file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
+        file_handler.setFormatter(formatter)
+        root_logger.addHandler(file_handler)
+    except Exception as e:
+        print(f"Impossible de configurer le logging de fichier: {e}")
 
-            # Give some time for tasks to complete
-            # Note: Proper shutdown might need more sophisticated signaling
-            import time
-            time.sleep(1) # Adjust as necessary
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
 
-            # Stop the loop
-            if loop.is_running():
-                loop.call_soon_threadsafe(loop.stop)
+    root_logger.setLevel(numeric_level)
 
-        async_thread.join(timeout=5) # Wait for the asyncio thread to finish
-        logging.info("Application shutdown complete.")
 
+class AsyncTkApp:
+    """Classe de base pour gérer l'intégration d'une boucle asyncio avec Tkinter."""
+    def __init__(self, root_widget):
+        self.root = root_widget
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        self.is_running = True
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def run_forever(self):
+        """Démarre la boucle principale qui gère à la fois Tkinter et asyncio."""
+        self._update_loop()
+        self.root.mainloop()
+
+    def _update_loop(self):
+        """Exécute une passe de la boucle asyncio et des mises à jour de Tkinter."""
+        if not self.is_running:
+            return
+            
+        self.loop.stop()
+        self.loop.run_forever()
+        self.root.update()
+        self.root.after(50, self._update_loop)
+
+    async def _shutdown_async_tasks(self):
+        """Annule et attend la terminaison des tâches asyncio en cours."""
+        tasks = [t for t in asyncio.all_tasks(loop=self.loop) if t is not asyncio.current_task(loop=self.loop)]
+        if not tasks:
+            return
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    def on_close(self):
+        """Gère la fermeture propre de l'application."""
+        if not self.is_running:
+            return
+        self.is_running = False
+        
+        try:
+            self.loop.run_until_complete(self._shutdown_async_tasks())
+        finally:
+            self.loop.close()
+            self.root.destroy()
+
+
+def main():
+    """Point d'entrée principal de l'application."""
+    root = tk.Tk()
+    app = AsyncTkApp(root)
+
+    try:
+        # Charger les settings pour le logging (format dictionnaire)
+        settings_manager = SettingsManager('settings.json')
+        logging_settings = settings_manager.get_settings()
+        setup_logging(logging_settings)
+
+        # Charger les settings pour les composants (format dataclass)
+        settings = load_settings()
+
+        # Initialisation des composants principaux
+        distributed_client = DistributedClient(settings)
+        server_discovery = ServerDiscovery(distributed_client, settings)
+        capability_matcher = CapabilityMatcher()
+        job_scheduler = JobScheduler(distributed_client, capability_matcher)
+        
+        # Fonction pour exécuter des tâches async depuis l'interface
+        def run_async_func(coro, loop=None):
+            # Le paramètre loop est ignoré car on utilise toujours app.loop
+            return app.loop.create_task(coro)
+
+        # Création de la fenêtre principale
+        main_window = MainWindow(root, distributed_client, server_discovery, job_scheduler, app.loop, run_async_func)
+        
+        # Lancer les tâches de fond
+        app.loop.create_task(server_discovery.start_discovery())
+        app.loop.create_task(job_scheduler.start_scheduler())
+        
+        # Démarrer l'application
+        app.run_forever()
+
+    except Exception as e:
+        logging.exception("Une erreur fatale et non gérée est survenue")
+        messagebox.showerror(
+            "Erreur Fatale", 
+            f"Une erreur critique est survenue:\n\n{e}\n\nL'application va se fermer. "
+            "Consultez le fichier de log pour plus de détails."
+        )
+        if app.is_running:
+            app.on_close()
 
 if __name__ == "__main__":
     main()
