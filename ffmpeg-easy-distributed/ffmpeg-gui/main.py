@@ -39,7 +39,7 @@ def main():
     asyncio.set_event_loop(loop)
 
     # Initialisation des composants distribués
-    distributed_client = DistributedClient(settings, loop=loop) # Pass loop if needed by client
+    distributed_client = DistributedClient(settings) # loop is implicitly used by asyncio
     server_discovery = ServerDiscovery(distributed_client, settings, loop=loop)
     capability_matcher = CapabilityMatcher()
     job_scheduler = JobScheduler(distributed_client, capability_matcher, loop=loop)
