@@ -28,7 +28,7 @@ class ServerManagerWindow:
         
         self.build_ui()
         self.server_discovery.register_server_update_callback(self.refresh_display)
-        self.run_async_func(self._initial_load_servers(), self.loop)
+        self.run_async_func(self._initial_load_servers())
         
         # Mettre le focus sur le champ IP après construction de l'interface
         self.window.after(100, lambda: self.ip_entry.focus_set())
@@ -99,9 +99,9 @@ class ServerManagerWindow:
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X, pady=(10, 0))
         
-        ttk.Button(button_frame, text="Actualiser", command=lambda: self.run_async_func(self.refresh_servers(), self.loop)).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_frame, text="Actualiser", command=lambda: self.run_async_func(self.refresh_servers())).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(button_frame, text="Supprimer", command=self.remove_server_action).pack(side=tk.LEFT, padx=(0, 5)) # remove_server_action will call run_async_func
-        ttk.Button(button_frame, text="Test Ping", command=lambda: self.run_async_func(self.ping_selected_servers(), self.loop)).pack(side=tk.LEFT)
+        ttk.Button(button_frame, text="Test Ping", command=lambda: self.run_async_func(self.ping_selected_servers())).pack(side=tk.LEFT)
 
     def add_server_action(self):
         """Action pour ajouter un serveur."""
@@ -116,7 +116,7 @@ class ServerManagerWindow:
             messagebox.showerror("Erreur", "IP requise")
             return
         
-        self.run_async_func(self._add_server_and_update_ui(ip, port), self.loop)
+        self.run_async_func(self._add_server_and_update_ui(ip, port))
 
     async def _add_server_and_update_ui(self, ip: str, port: int):
         """Ajoute un serveur et met à jour l'UI."""
@@ -170,7 +170,7 @@ class ServerManagerWindow:
             return
         
         server_id = selection[0]
-        self.run_async_func(self._remove_server_and_update_ui(server_id), self.loop)
+        self.run_async_func(self._remove_server_and_update_ui(server_id))
 
     async def _remove_server_and_update_ui(self, server_id: str):
         """Supprime un serveur et met à jour l'UI."""
