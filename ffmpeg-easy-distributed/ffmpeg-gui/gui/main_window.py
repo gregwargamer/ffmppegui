@@ -2542,18 +2542,27 @@ class MainWindow:
         if not compatible_local:
             fallback_encoders = {
                 'webp': 'libwebp - WebP encoder',
-                'jpegxl': 'libjxl - JPEG XL encoder', 
+                'jpegxl': 'libjxl - JPEG XL encoder',
                 'heic': 'libx265 - HEIC encoder', # Typically uses HEVC encoders
                 'avif': 'libaom-av1 - AVIF encoder', # Typically uses AV1 encoders
                 'png': 'png - PNG encoder',
-                'jpeg': 'mjpeg - Motion JPEG encoder', # or libjpeg
+                'jpeg': 'mjpeg - Motion JPEG encoder', # or libjpeg-turbo
                 'h264': 'libx264 - H.264 encoder',
                 'hevc': 'libx265 - H.265/HEVC encoder',
+                'av1': 'libaom-av1 - AV1 encoder', # Added AV1
+                'vp9': 'libvpx-vp9 - VP9 encoder', # Added VP9
+
+                # Audio codecs - ensure keys match output of FFmpegHelpers.available_codecs()
                 'aac': 'aac - AAC encoder',
+                'mp3': 'libmp3lame - MP3 encoder', # Key is "mp3"
                 'flac': 'flac - FLAC encoder',
-                'mp3': 'libmp3lame - MP3 encoder',
                 'opus': 'libopus - Opus encoder',
-                # Add other common fallbacks as needed
+                'vorbis': 'libvorbis - Vorbis encoder', # Added Vorbis
+                'pcm_s16le': 'pcm_s16le - PCM S16LE encoder', # For WAV
+                'alac': 'alac - ALAC (Apple Lossless Audio Codec) encoder', # Added ALAC
+                'pcm_alaw': 'pcm_alaw - PCM A-law encoder',
+                'pcm_mulaw': 'pcm_mulaw - PCM mu-law encoder',
+                # Add more common PCM formats if necessary
             }
             if codec_to_use in fallback_encoders:
                 compatible_local = [fallback_encoders[codec_to_use]]
