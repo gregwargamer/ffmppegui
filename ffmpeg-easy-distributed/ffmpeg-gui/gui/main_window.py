@@ -720,10 +720,13 @@ class MainWindow:
         
         # Séquence d'initialisation dans le bon ordre
         self._update_media_type_ui(initial_media_type)
-        self._update_codec_choices()           # Remplir les codecs selon le type de média
-        self._update_encoder_choices()         # Remplir les encodeurs selon le codec
-        self._update_container_choices()       # Remplir les conteneurs selon codec/encodeur
-        self._update_quality_controls_for_global()  # Adapter les contrôles qualité
+        self._update_codec_choices()           # Remplir les codecs selon le type de média (initial call)
+        self._update_encoder_choices()         # Remplir les encodeurs selon le codec (initial call)
+        self._update_container_choices()       # Remplir les conteneurs selon codec/encodeur (initial call)
+        # self._update_quality_controls_for_global() # This is the old call, it's now handled by
+                                                 # _initial_ui_setup via _update_ui_for_media_type_and_settings
+                                                 # which calls _update_quality_controls_ui.
+                                                 # The calls above ensure comboboxes have initial values before full orchestration.
         
         self.root.after(100, self._update_scroll_state)
         
