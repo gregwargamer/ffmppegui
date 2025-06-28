@@ -2381,6 +2381,111 @@ class MainWindow:
         # media_type_to_use = for_media_type if for_media_type is not None else self.global_type_var.get() # Not directly used for encoder logic here but good for logging
         codec_to_use = codec if codec is not None else self.global_codec_var.get()
 
+        self.logger.debug(f"Updating encoder choices for codec: {codec_to_use}")
+        print(f"DEBUG: _update_encoder_choices called with codec='{codec_to_use}'")
+
+        if not codec_to_use:
+            self.global_encoder_combo['values'] = []
+            self.global_encoder_var.set("")
+            print("DEBUG: No codec specified, clearing encoder choices")
+            return
+
+        # 1. Encodeurs locaux compatibles
+        local_encoders_info = FFmpegHelpers.available_encoders() # Expect list of dicts
+        print(f"DEBUG: Found {len(local_encoders_info)} total encoders")
+        
+        compatible_local = [
+            f"{enc['name']} - {enc['description']}"
+            for enc in local_encoders_info
+            if enc.get('codec') == codec_to_use # Use .get for safety
+        ]
+        
+        print(f"DEBUG: Found {len(compatible_local)} compatible encoders for codec '{codec_to_use}':")
+        for enc in compatible_local:
+            print(f"DEBUG:   - {enc}")
+        
+        # Ajouter des encodeurs par défaut si aucun n'est trouvé pour certains codecs
+        if not compatible_local:
+            print(f"DEBUG: No compatible encoders found, checking fallbacks...")
+            fallback_encoders = {
+                'webp': 'libwebp - WebP encoder',
+                'jpegxl': 'libjxl - JPEG XL encoder', 
+                'heic': 'libx265 - HEIC encoder', # Typically uses HEVC encoders
+                'avif': 'libaom-av1 - AVIF encoder', # Typically uses AV1 encoders
+                'png': 'png - PNG encoder',
+                'jpeg': 'mjpeg - Motion JPEG encoder', # or libjpeg-turbo
+                'h264': 'libx264 - H.264 encoder',
+                'hevc': 'libx265 - H.265/HEVC encoder',
+                'av1': 'libaom-av1 - AV1 encoder', # Added AV1
+                'vp9': 'libvpx-vp9 - VP9 encoder', # Added VP9
+
+                # Audio codecs - ensure keys match output of FFmpegHelpers.available_codecs()
+                'aac': 'aac - AAC encoder',
+                'mp3': 'libmp3lame - MP3 encoder', # Key is "mp3"
+                'flac': 'flac - FLAC encoder',
+                'opus': 'libopus - Opus encoder',
+                'vorbis': 'libvorbis - Vorbis encoder', # Added Vorbis
+                'pcm_s16le': 'pcm_s16le - PCM S16LE encoder', # For WAV
+                'alac': 'alac - ALAC (Apple Lossless Audio Codec) encoder', # Added ALAC
+                'pcm_alaw': 'pcm_alaw - PCM A-law encoder',
+                'pcm_mulaw': 'pcm_mulaw - PCM mu-law encoder',
+                # Add more common PCM formats if necessary
+            }
+            if codec_to_use in fallback_encoders:
+                compatible_local = [fallback_encoders[codec_to_use]]
+                print(f"DEBUG: Using fallback encoder: {fallback_encoders[codec_to_use]}")
+
+        # 2. Encodeurs matériels distants
+        remote_encoders_list: list[str] = [] # Renamed to avoid conflict
+        if self.distributed_client: # Ensure client exists
+            connected_servers = self.distributed_client.get_connected_servers()
+            for server in connected_servers:
+                # Ensure server status and capabilities are accessible
+                server_status_val = getattr(server.status, 'value', None) if hasattr(server, 'status') else None
+                if server_status_val == 'online' and hasattr(server, 'capabilities') and server.capabilities:
+
+                    all_hw_encoders_on_server: List[str] = []
+                    if hasattr(server.capabilities, 'hardware_encoders') and server.capabilities.hardware_encoders:
+                        if isinstance(server.capabilities.hardware_encoders, dict):
+                            # e.g. {"nvidia": ["h264_nvenc"], "intel": ["h264_qsv"]}
+                            for enc_list_per_type in server.capabilities.hardware_encoders.values():
+                                if isinstance(enc_list_per_type, list):
+                                    all_hw_encoders_on_server.extend(enc_list_per_type)
+                        elif isinstance(server.capabilities.hardware_encoders, list):
+                            # e.g. ["h264_nvenc", "hevc_nvenc"]
+                            all_hw_encoders_on_server.extend(server.capabilities.hardware_encoders)
+
+                    for hw_enc_name in all_hw_encoders_on_server:
+                        # Basic compatibility check - this might need to be more robust,
+                        # potentially checking against FFmpeg's known codec <-> encoder mappings.
+                        # For now, simple string matching.
+                        if codec_to_use in hw_enc_name or \
+                           (codec_to_use == 'hevc' and ('h265' in hw_enc_name or 'hevc' in hw_enc_name)) or \
+                           (codec_to_use == 'av1' and 'av1' in hw_enc_name) or \
+                           (codec_to_use == 'h264' and ('h264' in hw_enc_name or 'avc' in hw_enc_name)):
+                            remote_encoders_list.append(f"{server.name}: {hw_enc_name}")
+
+        all_encoders = compatible_local + list(set(remote_encoders_list)) # list(set()) to remove duplicates
+        print(f"DEBUG: Total encoders available: {len(all_encoders)}")
+        for i, enc in enumerate(all_encoders):
+            print(f"DEBUG: [{i}] {enc}")
+
+        current_encoder_val = self.global_encoder_var.get() # Preserve current if valid
+        self.global_encoder_combo['values'] = all_encoders
+        print(f"DEBUG: Setting encoder combo values to: {all_encoders}")
+
+        if current_encoder_val and current_encoder_val in all_encoders:
+            self.global_encoder_var.set(current_encoder_val)
+            print(f"DEBUG: Preserving current encoder: {current_encoder_val}")
+        elif all_encoders:
+            self.global_encoder_var.set(all_encoders[0])
+            print(f"DEBUG: Setting encoder to first available: {all_encoders[0]}")
+        else:
+            self.global_encoder_var.set("")
+            print("DEBUG: No encoders available, clearing encoder selection")
+
+        # Orchestrating method will call subsequent updates like _update_container_choices and _update_quality_preset_controls.
+
     def _update_ui_for_media_type_and_settings(self, media_type: str, output_config: Optional[OutputConfig] = None, is_global_context: bool = False):
         """
         Orchestrates the update of the encoding settings UI based on the given media type
@@ -2403,9 +2508,7 @@ class MainWindow:
             self.global_encoder_var.set(self.state.global_encoder) # Will be blank from AppState
             self.container_var.set(self.state.global_container)   # Will be blank from AppState
 
-            # Reset other UI vars to reflect a fresh global context for the *new* media_type
-            # Quality/Bitrate should use defaults for the new media_type and potentially blank encoder
-            temp_encoder_for_defaults = self.state.global_encoder # which is blank
+            temp_encoder_for_defaults = self.state.global_encoder
             self.quality_var.set(self._get_optimal_quality_for_codec(temp_encoder_for_defaults, media_type))
             self.bitrate_var.set(self._get_optimal_quality_for_codec(temp_encoder_for_defaults, media_type, mode="bitrate"))
             self.preset_var.set("medium")
@@ -2610,130 +2713,6 @@ class MainWindow:
             self.global_encoder_var.set("")
 
         # Orchestrating method will call subsequent updates like _update_container_choices and _update_quality_preset_controls.
-
-    def _update_ui_for_media_type_and_settings(self, media_type: str, output_config: Optional[OutputConfig] = None, is_global_context: bool = False):
-        """
-        Orchestrates the update of the encoding settings UI based on the given media type
-        and specific output configuration OR global defaults.
-
-        Args:
-            media_type: The media type ("video", "audio", "image") to adapt the UI for.
-            output_config: The specific OutputConfig of a job to load settings from.
-                           If None, UI reflects global defaults for the media_type.
-            is_global_context: True if this update is for global settings (e.g. user changed main media type dropdown),
-                               False if for a specific job selected in the job combobox.
-        """
-        self.logger.info(f"Updating UI. Media Type: {media_type}, Job Config: {'Provided' if output_config else 'None'}, Global Context: {is_global_context}")
-
-        # 0. If this is a global context change, ensure AppState reflects the new global media type
-        #    and its associated blank codec/encoder values.
-        if is_global_context:
-            self.global_type_var.set(self.state.global_media_type) # Should match 'media_type' arg
-            self.global_codec_var.set(self.state.global_codec)     # Will be blank from AppState
-            self.global_encoder_var.set(self.state.global_encoder) # Will be blank from AppState
-            self.container_var.set(self.state.global_container)   # Will be blank from AppState
-
-            temp_encoder_for_defaults = self.state.global_encoder
-            self.quality_var.set(self._get_optimal_quality_for_codec(temp_encoder_for_defaults, media_type))
-            self.bitrate_var.set(self._get_optimal_quality_for_codec(temp_encoder_for_defaults, media_type, mode="bitrate"))
-            self.preset_var.set("medium")
-            self.video_mode_var.set("quality")
-            self.custom_flags_var.set("")
-
-            self.resolution_var_settings.set(self.state.settings.ui.default_resolution or "Keep Original")
-            self.crop_top_var.set("0"); self.crop_bottom_var.set("0"); self.crop_left_var.set("0"); self.crop_right_var.set("0")
-            self.preserve_hdr_var.set(True); self.tonemap_var.set(False); self.tonemap_method_var.set("hable")
-            self.subtitle_mode_var.set("copy"); self.subtitle_path_var.set("")
-            self.lut_path_var.set(""); self.watermark_path_var.set("")
-            self.watermark_position_var.set("top_right"); self.watermark_scale_var.set(0.1)
-            self.watermark_opacity_var.set(1.0); self.watermark_padding_var.set(10)
-
-        # 1. Update visibility of UI sections based on media_type
-        self._update_media_type_ui(media_type)
-
-        # 2. Update codec choices based on media_type. This will also set self.global_codec_var.
-        self._update_codec_choices(for_media_type=media_type)
-
-        # 3. If a specific job's output_config is provided, load its settings into UI variables
-        if output_config and not is_global_context:
-            self.logger.debug(f"Loading settings from provided output_config for job: {getattr(output_config, 'name', 'N/A')}")
-
-            job_codec = getattr(output_config, 'codec', '')
-            if not job_codec and output_config.encoder:
-                encoder_name_lower = output_config.encoder.lower()
-                if "264" in encoder_name_lower or "avc" in encoder_name_lower: job_codec = "h264"
-                elif "265" in encoder_name_lower or "hevc" in encoder_name_lower: job_codec = "hevc"
-                elif "vp9" in encoder_name_lower: job_codec = "vp9"
-                elif "av1" in encoder_name_lower: job_codec = "av1"
-                elif "aac" in encoder_name_lower: job_codec = "aac"
-                elif "mp3" in encoder_name_lower: job_codec = "mp3"
-                elif "flac" in encoder_name_lower: job_codec = "flac"
-                elif "opus" in encoder_name_lower: job_codec = "opus"
-                elif "webp" in encoder_name_lower: job_codec = "webp"
-                elif "png" in encoder_name_lower: job_codec = "png"
-                elif "jp" in encoder_name_lower: job_codec = "jpeg"
-                if not job_codec:
-                    available_codecs_for_type = FFmpegHelpers.available_codecs().get(media_type, [])
-                    for ac_known in available_codecs_for_type:
-                        if ac_known in encoder_name_lower: job_codec = ac_known; break
-            self.global_codec_var.set(job_codec if job_codec else "")
-
-            self._update_encoder_choices(for_media_type=media_type, codec=self.global_codec_var.get())
-
-            encoder_name = getattr(output_config, 'encoder', '')
-            encoder_display = ""
-            if encoder_name:
-                for item_value in self.global_encoder_combo['values']:
-                    if item_value.startswith(encoder_name): encoder_display = item_value; break
-            self.global_encoder_var.set(encoder_display or encoder_name)
-
-            self.container_var.set(getattr(output_config, 'container', ''))
-            self.video_mode_var.set(getattr(output_config, 'video_mode', 'quality'))
-
-            quality_val = getattr(output_config, 'quality', '')
-            if not quality_val and hasattr(output_config, 'cq_value'): quality_val = getattr(output_config, 'cq_value', '')
-            self.quality_var.set(str(quality_val))
-
-            self.bitrate_var.set(str(getattr(output_config, 'bitrate', '')))
-            self.multipass_var.set(getattr(output_config, 'multipass', False))
-            self.preset_var.set(getattr(output_config, 'preset', 'medium'))
-            self.custom_flags_var.set(getattr(output_config, 'custom_flags', ''))
-
-            self.resolution_var_settings.set(getattr(output_config, 'resolution', "Keep Original"))
-            crop_settings = getattr(output_config, 'crop', {})
-            self.crop_top_var.set(str(crop_settings.get("top", "0"))); self.crop_bottom_var.set(str(crop_settings.get("bottom", "0")))
-            self.crop_left_var.set(str(crop_settings.get("left", "0"))); self.crop_right_var.set(str(crop_settings.get("right", "0")))
-
-            self.preserve_hdr_var.set(getattr(output_config, 'preserve_hdr', True))
-            self.tonemap_var.set(getattr(output_config, 'tonemap', False))
-            self.tonemap_method_var.set(getattr(output_config, 'tonemap_method', "hable"))
-
-            self.subtitle_mode_var.set(getattr(output_config, 'subtitle_mode', "copy"))
-            self.subtitle_path_var.set(getattr(output_config, 'subtitle_path', ""))
-
-            self.lut_path_var.set(getattr(output_config, 'lut_path', ""))
-            watermark_cfg = getattr(output_config, 'watermark', {})
-            self.watermark_path_var.set(watermark_cfg.get('path', "")); self.watermark_position_var.set(watermark_cfg.get('position', "top_right"))
-            self.watermark_scale_var.set(float(watermark_cfg.get('scale', 0.1))); self.watermark_opacity_var.set(float(watermark_cfg.get('opacity', 1.0)))
-            self.watermark_padding_var.set(int(watermark_cfg.get('padding', 10)))
-        else:
-            self._update_encoder_choices(for_media_type=media_type, codec=self.global_codec_var.get())
-
-        self._update_container_choices(for_media_type=media_type)
-        self._update_quality_preset_controls(encoder=self.global_encoder_var.get())
-
-        effective_output_config_for_quality = output_config if output_config and not is_global_context else None
-        self._update_quality_controls_ui(media_type=media_type,
-                                         encoder=self.global_encoder_var.get(),
-                                         codec=self.global_codec_var.get(),
-                                         output_config=effective_output_config_for_quality)
-
-        self._on_video_mode_change()
-        self._on_tonemap_change()
-        self._on_subtitle_mode_change()
-        self._on_resolution_change()
-
-        self.logger.debug(f"UI Update complete. UI Vars: Type={self.global_type_var.get()}, Codec={self.global_codec_var.get()}, Enc={self.global_encoder_var.get()}, Cont={self.container_var.get()}")
 
     def _update_quality_controls_ui(self, media_type: Optional[str] = None, encoder: Optional[str] = None, codec: Optional[str] = None, output_config: Optional[OutputConfig] = None):
         """Met à jour les contrôles de qualité en fonction du type de média, de l'encodeur sélectionné et de la configuration existante."""

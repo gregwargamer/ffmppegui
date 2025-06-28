@@ -338,3 +338,40 @@
 2025-06-28 19:24:19,732 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '85'}
 2025-06-28 19:24:24,661 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
 2025-06-28 19:24:24,661 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '85'}
+2025-06-28 20:59:46,979 - core.hardware_detector - INFO - 🔍 Détection des capacités du serveur...
+2025-06-28 20:59:49,990 - core.hardware_detector - INFO - ✅ Capacités détectées: 11 logiciels, 0 matériels
+2025-06-28 20:59:49,990 - core.local_server - INFO - 🔧 Serveur local initialisé avec 11 encodeurs
+2025-06-28 20:59:50,005 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 20:59:50,058 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'codec': 'h264'}
+2025-06-28 20:59:50,104 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'encoder': 'libx264'}
+2025-06-28 20:59:50,104 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'encoder': 'libx264', 'container': 'mp4'}
+2025-06-28 20:59:50,106 - gui.main_window - WARNING - ⚠️ TkinterDnD2 non disponible - drag and drop désactivé
+2025-06-28 20:59:50,106 - core.server_discovery - INFO - Démarrage de la découverte des serveurs...
+2025-06-28 20:59:50,106 - core.job_scheduler - INFO - Démarrage du planificateur de jobs...
+2025-06-28 20:59:50,350 - gui.main_window - INFO - ✅ Interface adaptative initialisée - Type de média: video
+2025-06-28 20:59:50,351 - gui.main_window - INFO - Updating UI. Media Type: video, Job Config: None, Global Context: True
+2025-06-28 20:59:50,351 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'encoder': 'libx264'}
+2025-06-28 20:59:50,351 - gui.main_window - INFO - 🎯 Adaptation interface pour type: video
+2025-06-28 20:59:50,351 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'encoder': 'libx264'}
+2025-06-28 20:59:50,351 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'encoder': 'libx264'}
+2025-06-28 20:59:50,351 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '22'}
+2025-06-28 20:59:56,482 - gui.main_window - INFO - Global media type dropdown changed by user to: image
+2025-06-28 20:59:56,482 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'encoder': 'libx264', 'container': 'mp4'}
+2025-06-28 20:59:56,482 - core.app_controller - INFO - Type de média global changé pour: image
+2025-06-28 20:59:56,482 - gui.main_window - INFO - Updating UI. Media Type: image, Job Config: None, Global Context: True
+2025-06-28 20:59:56,482 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'quality': '85'}
+2025-06-28 20:59:56,482 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': 'medium'}
+2025-06-28 20:59:56,482 - gui.main_window - INFO - 🎯 Adaptation interface pour type: image
+2025-06-28 20:59:56,483 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'codec': 'webp'}
+2025-06-28 20:59:56,483 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'encoder': 'libwebp_anim'}
+2025-06-28 20:59:56,483 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'encoder': 'libwebp_anim'}
+2025-06-28 20:59:56,483 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'container': 'webp'}
+2025-06-28 20:59:56,483 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 20:59:56,483 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'quality': '90'}
+2025-06-28 20:59:56,483 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '90'}
+2025-06-28 21:00:03,875 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'encoder': 'libwebp_anim'}
+2025-06-28 21:00:03,875 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'encoder': 'libwebp_anim'}
+2025-06-28 21:00:03,876 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 21:00:03,876 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '90'}
+2025-06-28 21:00:07,124 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': ''}
+2025-06-28 21:00:07,125 - gui.main_window - INFO - Pushing UI changes to AppState global settings: {'preset': '90'}
