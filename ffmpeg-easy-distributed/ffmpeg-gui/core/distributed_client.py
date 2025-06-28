@@ -200,16 +200,22 @@ class DistributedClient:
 
         elif message.type == MessageType.PONG:
             if message.reply_to in self.pending_requests:
-                self.pending_requests[message.reply_to].set_result(message)
+                future = self.pending_requests[message.reply_to]
+                if not future.done():
+                    future.set_result(message)
         
         elif message.type == MessageType.ERROR or message.type == MessageType.VALIDATION_ERROR:
             self.logger.error(f"Erreur du serveur {uri}: {message.data.get('error', 'Erreur inconnue')}")
             if message.reply_to in self.pending_requests:
-                self.pending_requests[message.reply_to].set_exception(ProtocolError(message.data.get('error')))
+                future = self.pending_requests[message.reply_to]
+                if not future.done():
+                    future.set_exception(ProtocolError(message.data.get('error')))
 
         # Gérer les réponses aux requêtes en attente
         if message.reply_to and message.reply_to in self.pending_requests:
-            self.pending_requests[message.reply_to].set_result(message)
+            future = self.pending_requests[message.reply_to]
+            if not future.done():
+                future.set_result(message)
 
     async def send_job_to_server(self, server_id: str, job_config: JobConfiguration,
                                  progress_callback: Callable[[JobProgress], Any],
@@ -223,7 +229,8 @@ class DistributedClient:
         uri = f"ws://{server_info.ip}:{server_info.port}"
         websocket = self.active_connections.get(uri)
         
-        if not websocket or not websocket.open:
+        # Vérifier si la connexion est active et ouverte
+        if not websocket or getattr(websocket, 'closed', True):
             self.logger.error(f"Connexion au serveur {server_id} non active.")
             return False
 
@@ -272,7 +279,8 @@ class DistributedClient:
         uri = f"ws://{server_info.ip}:{server_info.port}"
         websocket = self.active_connections.get(uri)
         
-        if not websocket or not websocket.open:
+        # Vérifier si la connexion est active et ouverte
+        if not websocket or getattr(websocket, 'closed', True):
             self.logger.error(f"Connexion au serveur {server_id} non active.")
             return None
 
@@ -304,7 +312,8 @@ class DistributedClient:
         uri = f"ws://{server_info.ip}:{server_info.port}"
         websocket = self.active_connections.get(uri)
         
-        if not websocket or not websocket.open:
+        # Vérifier si la connexion est active et ouverte
+        if not websocket or getattr(websocket, 'closed', True):
             self.logger.warning(f"Connexion au serveur {server_id} non active pour ping.")
             return False
 

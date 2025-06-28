@@ -56,11 +56,12 @@ class OutputConfig:
 
 
 class EncodeJob:
-    def __init__(self, src_path: Path, mode: str, initial_output_config: OutputConfig = None):
-        self.src_path: Path = src_path
-        self.mode: str = mode # Primary mode of the source (video, audio, image)
-        self.relative_src_path: Optional[Path] = None # For preserving structure
-
+    """Représente un travail d'encodage unique."""
+    def __init__(self, src_path: Path, mode: str, initial_output_config: Optional[OutputConfig] = None):
+        self.job_id: str = str(uuid.uuid4())
+        self.src_path = src_path
+        self.relative_src_path: Optional[Path] = None
+        self.mode = mode  # 'video', 'audio', 'image', 'gif'
         self.outputs: List[OutputConfig] = []
         if initial_output_config:
             self.outputs.append(initial_output_config)

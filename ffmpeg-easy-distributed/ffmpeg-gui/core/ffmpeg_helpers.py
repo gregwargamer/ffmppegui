@@ -1,6 +1,7 @@
 import subprocess
 import sys
 from tkinter import messagebox
+import re
 
 class FFmpegHelpers:
     """Utility functions to query ffmpeg."""
@@ -13,20 +14,42 @@ class FFmpegHelpers:
     def available_encoders(cls):
         if cls._encoders_cache is None:
             try:
-                result = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True)
+                result = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True, check=True)
                 encoders = []
-                for line in result.stdout.split('\n'):
-                    if line.startswith(' V') or line.startswith(' A'):
-                        parts = line.split()
-                        if len(parts) >= 3:
+                codec_pattern = re.compile(r'\(codec (\w+)\)')
+                for line in result.stdout.splitlines():
+                    # On ne s'intéresse qu'aux lignes qui décrivent un encodeur
+                    if not line.strip() or line.startswith("="):
+                        continue
+                    
+                    # V..... = Video, A..... = Audio, S..... = Subtitle
+                    if line[1] == 'V' or line[1] == 'A' or line[1] == 'S':
+                        parts = line.strip().split()
+                        if len(parts) >= 2:
                             encoder_name = parts[1]
                             description = ' '.join(parts[2:])
-                            # Taguer les encodeurs hardware
-                            if cls.is_hardware_encoder(encoder_name):
-                                description += " (Hardware)"
-                            encoders.append((encoder_name, description))
+                            
+                            match = codec_pattern.search(description)
+                            implemented_codec = match.group(1) if match else None
+                            
+                            # Si le codec n'est pas explicitement listé, on essaie de le deviner
+                            if not implemented_codec:
+                                if "h264" in encoder_name: implemented_codec = "h264"
+                                elif "h265" in encoder_name or "hevc" in encoder_name: implemented_codec = "hevc"
+                                elif "av1" in encoder_name: implemented_codec = "av1"
+                                elif "vp9" in encoder_name: implemented_codec = "vp9"
+                                elif "webp" in encoder_name: implemented_codec = "webp"
+                                elif "aac" in encoder_name: implemented_codec = "aac"
+                                elif "mp3" in encoder_name: implemented_codec = "mp3lame" # ou mp3
+
+                            encoders.append({
+                                "name": encoder_name,
+                                "description": description,
+                                "codec": implemented_codec
+                            })
+
                 cls._encoders_cache = encoders
-            except FileNotFoundError:
+            except (FileNotFoundError, subprocess.CalledProcessError):
                 cls._encoders_cache = []
         return cls._encoders_cache
 
@@ -54,43 +77,42 @@ class FFmpegHelpers:
         """Retourne uniquement les encodeurs hardware disponibles"""
         if cls._hw_encoders_cache is None:
             all_encoders = cls.available_encoders()
-            cls._hw_encoders_cache = [(name, desc) for name, desc in all_encoders 
-                                     if cls.is_hardware_encoder(name)]
+            # La structure a changé en dictionnaire
+            cls._hw_encoders_cache = [encoder for encoder in all_encoders 
+                                     if cls.is_hardware_encoder(encoder["name"])]
         return cls._hw_encoders_cache
 
     @classmethod
     def available_codecs(cls):
         if cls._codecs_cache is None:
             try:
-                result = subprocess.run(["ffmpeg", "-hide_banner", "-codecs"], capture_output=True, text=True)
+                result = subprocess.run(["ffmpeg", "-hide_banner", "-codecs"], capture_output=True, text=True, check=True)
                 video, audio, image = set(), set(), set()
+                
+                # Regex pour extraire le nom du codec
+                codec_line_re = re.compile(r"^\s(?:D|E|\.)(V|A|S|\.)(?:F|\.)(?:S|\.)(?:D|\.)(?:T|\.)(?:I|\.)\s+(\w+)")
+
                 for line in result.stdout.splitlines():
-                    if line.startswith(" ") and "(" not in line:
-                        parts = line.split()
-                        if len(parts) >= 2:
-                            flags, name = parts[0], parts[1]
-                            if "V" in flags:
-                                video.add(name)
-                            elif "A" in flags:
-                                audio.add(name)
-                            # Accept more for image: known image codecs/extensions
-                            if name.lower() in {"jpg", "jpeg", "webp", "png", "avif", "tiff", "bmp", "jxl", "jpegxl"}:
-                                image.add(name)
-                            elif "S" in flags or "I" in flags:
-                                image.add(name)
-                # Add common image codecs if missing or to ensure they are categorized as image
-                common_image_formats = {"jpg", "jpeg", "webp", "png", "avif", "tiff", "bmp", "jxl", "jpegxl", "heic", "heif"}
-                for extra in common_image_formats:
-                    # Add them if they are actual codec names or just as format identifiers
-                    # This ensures they appear in UI lists for image format selection.
-                    image.add(extra) # We can refine later if 'hevc' is a codec vs 'heif' the format.
+                    match = codec_line_re.match(line)
+                    if match:
+                        type_flag, name = match.groups()
+                        if type_flag == 'V':
+                            video.add(name)
+                        elif type_flag == 'A':
+                            audio.add(name)
+                        elif type_flag == 'S':
+                             # Pour l'instant on considère les sous-titres comme des 'images' pour le UI
+                            image.add(name)
+                
+                # Ajout manuel des formats d'image courants qui peuvent ne pas être listés comme des codecs traditionnels
+                image.update(["png", "mjpeg", "jpg", "webp", "tiff", "bmp", "gif", "avif"])
 
                 cls._codecs_cache = {
-                    "video": sorted(list(video)), # Convert set to list before sorting
-                    "audio": sorted(audio),
-                    "image": sorted(image)
+                    "video": sorted(list(video)) or ["h264", "hevc", "vp9", "av1", "mpeg4"],
+                    "audio": sorted(list(audio)) or ["aac", "mp3", "opus", "flac"],
+                    "image": sorted(list(image)) or ["webp", "png", "jpeg", "bmp"]
                 }
-            except FileNotFoundError:
-                messagebox.showerror("FFmpeg not found", "ffmpeg executable not found in PATH.")
-                sys.exit(1)
+            except (FileNotFoundError, subprocess.CalledProcessError) as e:
+                messagebox.showerror("Erreur FFmpeg", f"Impossible de lister les codecs: {e}")
+                cls._codecs_cache = {"video": [], "audio": [], "image": []}
         return cls._codecs_cache

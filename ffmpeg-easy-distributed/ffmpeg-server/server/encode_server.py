@@ -73,11 +73,17 @@ class EncodeServer:
         # Fermer les connexions client existantes
         if self.clients:
             self.logger.info(f"Fermeture de {len(self.clients)} connexions client...")
-            client_close_tasks = [
-                client.close(code=1001, reason="Server shutting down")
-                for client in self.clients.values()
-            ]
-            await asyncio.wait(client_close_tasks, timeout=5)
+            client_close_tasks = []
+            for client in self.clients.values():
+                try:
+                    # Vérifier que la connexion n'est pas déjà fermée avant de tenter de la fermer
+                    if not getattr(client, 'closed', True):
+                        client_close_tasks.append(client.close(code=1001, reason="Server shutting down"))
+                except Exception as e:
+                    self.logger.warning(f"Erreur lors de la fermeture d'un client: {e}")
+            
+            if client_close_tasks:
+                await asyncio.wait(client_close_tasks, timeout=5)
 
         # Annuler les jobs actifs
         if self.active_jobs:
@@ -286,20 +292,34 @@ class EncodeServer:
     
     async def _on_job_progress(self, client_id: str, progress: JobProgress):
         if client_id in self.clients:
-            # Convertir l'objet progress en dictionnaire sérialisable
-            progress_dict = {
-                'job_id': progress.job_id,
-                'progress': progress.progress,
-                'current_frame': progress.current_frame,
-                'total_frames': progress.total_frames,
-                'fps': progress.fps,
-                'bitrate': progress.bitrate,
-                'speed': progress.speed,
-                'eta': progress.eta,
-                'server_id': progress.server_id
-            }
-            progress_msg = Message(MessageType.JOB_PROGRESS, progress_dict)
-            await send_message(self.clients[client_id], progress_msg)
+            # Vérifier que la connexion WebSocket est toujours active
+            websocket = self.clients[client_id]
+            try:
+                # Vérifier l'état de la connexion WebSocket (compatible avec websockets 15.x)
+                if getattr(websocket, 'closed', True):
+                    self.logger.warning(f"Connexion WebSocket fermée pour client {client_id}, suppression du cache")
+                    del self.clients[client_id]
+                    return
+                
+                # Convertir l'objet progress en dictionnaire sérialisable
+                progress_dict = {
+                    'job_id': progress.job_id,
+                    'progress': progress.progress,
+                    'current_frame': progress.current_frame,
+                    'total_frames': progress.total_frames,
+                    'fps': progress.fps,
+                    'bitrate': progress.bitrate,
+                    'speed': progress.speed,
+                    'eta': progress.eta,
+                    'server_id': progress.server_id
+                }
+                progress_msg = Message(MessageType.JOB_PROGRESS, progress_dict)
+                await send_message(websocket, progress_msg)
+            except Exception as e:
+                self.logger.warning(f"Erreur envoi progression au client {client_id}: {e}")
+                # Nettoyer le client défaillant
+                if client_id in self.clients:
+                    del self.clients[client_id]
     
     async def _on_job_completion(self, client_id: str, result: JobResult):
         job_id = result.job_id
@@ -312,20 +332,34 @@ class EncodeServer:
             self.jobs_failed += 1
         
         if client_id in self.clients:
-            # Convertir l'objet result en dictionnaire sérialisable
-            result_dict = {
-                'job_id': result.job_id,
-                'status': result.status.value,  # Convertir l'enum en string
-                'output_file': result.output_file,
-                'file_size': result.file_size,
-                'duration': result.duration,
-                'average_fps': result.average_fps,
-                'error_message': result.error_message,
-                'server_id': result.server_id,
-                'completed_at': result.completed_at
-            }
-            completion_msg = Message(MessageType.JOB_COMPLETED, result_dict)
-            await send_message(self.clients[client_id], completion_msg)
+            # Vérifier que la connexion WebSocket est toujours active
+            websocket = self.clients[client_id]
+            try:
+                # Vérifier l'état de la connexion WebSocket (compatible avec websockets 15.x)
+                if getattr(websocket, 'closed', True):
+                    self.logger.warning(f"Connexion WebSocket fermée pour client {client_id}, suppression du cache")
+                    del self.clients[client_id]
+                    return
+                
+                # Convertir l'objet result en dictionnaire sérialisable
+                result_dict = {
+                    'job_id': result.job_id,
+                    'status': result.status.value,  # Convertir l'enum en string
+                    'output_file': result.output_file,
+                    'file_size': result.file_size,
+                    'duration': result.duration,
+                    'average_fps': result.average_fps,
+                    'error_message': result.error_message,
+                    'server_id': result.server_id,
+                    'completed_at': result.completed_at
+                }
+                completion_msg = Message(MessageType.JOB_COMPLETED, result_dict)
+                await send_message(websocket, completion_msg)
+            except Exception as e:
+                self.logger.warning(f"Erreur envoi résultat au client {client_id}: {e}")
+                # Nettoyer le client défaillant
+                if client_id in self.clients:
+                    del self.clients[client_id]
         
         self.logger.info(f"🎉 Job terminé: {job_id} ({result.status.value})")
     
