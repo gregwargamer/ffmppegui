@@ -1,9 +1,17 @@
 {
     "distributed": {
-        "auto_connect_servers": [],
+        "auto_connect_servers": [
+            {
+                "ip": "192.168.1.80",
+                "port": 8765
+            }
+        ],
         "default_timeout": 30,
         "max_concurrent_jobs": 10,
-        "preferred_encoders": ["h264_nvenc", "libx264"]
+        "preferred_encoders": [
+            "h264_nvenc",
+            "libx264"
+        ]
     },
     "ui": {
         "refresh_interval": 5,

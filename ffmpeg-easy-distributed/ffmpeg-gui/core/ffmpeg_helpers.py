@@ -39,6 +39,8 @@ class FFmpegHelpers:
                                 elif "av1" in encoder_name: implemented_codec = "av1"
                                 elif "vp9" in encoder_name: implemented_codec = "vp9"
                                 elif "webp" in encoder_name: implemented_codec = "webp"
+                                elif "jpegxl" in encoder_name or "jxl" in encoder_name: implemented_codec = "jpegxl"
+                                elif "heic" in encoder_name or "hevc_image" in encoder_name: implemented_codec = "heic"
                                 elif "aac" in encoder_name: implemented_codec = "aac"
                                 elif "mp3" in encoder_name: implemented_codec = "mp3lame" # ou mp3
 
@@ -105,12 +107,12 @@ class FFmpegHelpers:
                             image.add(name)
                 
                 # Ajout manuel des formats d'image courants qui peuvent ne pas être listés comme des codecs traditionnels
-                image.update(["png", "mjpeg", "jpg", "webp", "tiff", "bmp", "gif", "avif"])
+                image.update(["png", "mjpeg", "jpg", "webp", "tiff", "bmp", "gif", "avif", "jpegxl", "heic"])
 
                 cls._codecs_cache = {
                     "video": sorted(list(video)) or ["h264", "hevc", "vp9", "av1", "mpeg4"],
                     "audio": sorted(list(audio)) or ["aac", "mp3", "opus", "flac"],
-                    "image": sorted(list(image)) or ["webp", "png", "jpeg", "bmp"]
+                    "image": sorted(list(image)) or ["webp", "png", "jpeg", "bmp", "jpegxl", "heic"]
                 }
             except (FileNotFoundError, subprocess.CalledProcessError) as e:
                 messagebox.showerror("Erreur FFmpeg", f"Impossible de lister les codecs: {e}")

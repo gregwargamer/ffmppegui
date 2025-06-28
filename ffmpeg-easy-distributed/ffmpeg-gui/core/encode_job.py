@@ -2,6 +2,7 @@ import subprocess
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import uuid # For unique IDs for OutputConfig
+from enum import Enum
 
 # Using a simple class for OutputConfig for now. Could be a dataclass in Python 3.7+
 class OutputConfig:
@@ -405,3 +406,12 @@ class EncodeJob:
     def multipass(self, value: bool):
         if self._first_output:
             self._first_output.multipass = value
+
+
+class JobStatus(str, Enum):
+    PENDING = "pending"
+    QUEUED = "queued"
+    ASSIGNED = "assigned"
+    RUNNING = "running"
+    PAUSED = "paused"
+    CANCELLED = "cancelled"

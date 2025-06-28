@@ -68,10 +68,21 @@ class JobScheduler:
                 connected_servers = self.distributed_client.get_connected_servers()
                 best_servers = self.capability_matcher.find_best_servers(job, connected_servers) if connected_servers else []
 
+                # Assigner le job et notifier l'UI
+                assigned_server_id = None
+                if best_servers and connected_servers:
+                    assigned_server_id = best_servers[0].server_id
+                else:
+                    assigned_server_id = self.local_server.get_server_info().server_id
+                
+                job.assigned_to = assigned_server_id
+                job.status = JobStatus.ASSIGNED
+                progress_callback = self._get_job_progress_callback(job.job_id)
+                await progress_callback(JobProgress(job_id=job.job_id, progress=0, speed="N/A", time="N/A", frame=0, fps=0.0))
+
                 if best_servers and connected_servers:
                     # Utiliser un serveur distant
-                    selected_server_match = best_servers[0]
-                    selected_server_id = selected_server_match.server_id
+                    selected_server_id = best_servers[0].server_id
                     self.logger.info(f"Job {job.job_id} assigné au serveur distant {selected_server_id}")
                     
                     success = await self.distributed_client.send_job_to_server(

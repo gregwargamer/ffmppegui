@@ -198,11 +198,26 @@ def build_ffmpeg_stream(job: EncodeJob):
                     else:
                         output_kwargs['q:v'] = quality_val
                 elif 'avif' in job.encoder.lower():
-                    # AVIF: qualité 0-100 
+                    # AVIF: CRF 0-63 
                     output_kwargs['crf'] = job.quality
                 elif 'jpeg' in job.encoder.lower() or 'mjpeg' in job.encoder.lower():
                     # JPEG: qualité 1-100
-                    output_kwargs['q:v'] = job.quality
+                    quality_val = int(job.quality) if job.quality.isdigit() else 85
+                    output_kwargs['q:v'] = quality_val
+                elif 'jpegxl' in job.encoder.lower() or 'jxl' in job.encoder.lower():
+                    # JPEGXL: distance 0.0-15.0 (0.0=lossless, plus bas = meilleure qualité)
+                    distance_val = float(job.quality) if job.quality.replace('.', '').isdigit() else 1.0
+                    if distance_val == 0.0:
+                        output_kwargs['distance'] = '0'  # Lossless
+                    else:
+                        output_kwargs['distance'] = str(distance_val)
+                elif 'heic' in job.encoder.lower():
+                    # HEIC: CRF comme HEVC (0-51)
+                    crf_val = int(job.quality) if job.quality.isdigit() else 23
+                    output_kwargs['crf'] = crf_val
+                elif 'png' in job.encoder.lower():
+                    # PNG: pas de paramètre de qualité (toujours lossless)
+                    pass
                 else:
                     # Autres codecs d'image
                     output_kwargs['q:v'] = job.quality

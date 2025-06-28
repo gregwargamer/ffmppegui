@@ -125,11 +125,13 @@ class MainWindow:
         self.loop = loop
         self.run_async_func = run_async_func
         self.logger = logging.getLogger(__name__)
+        self.server_map = {}
 
-        self.server_discovery.register_server_update_callback(self.update_server_status)
+        # Observer les changements de serveur pour mettre à jour la map et le statut
+        self.server_discovery.register_server_update_callback(self._update_server_map_and_status)
 
         self.jobs: list[EncodeJob] = []
-        self.job_rows = {}
+        self.job_rows: dict[str, dict] = {} # {tree_id: {"job": EncodeJob, "outputs": {output_id: tree_id}}}
         self.last_import_job_ids: list[str] = []
         
         self.is_running = False
@@ -193,15 +195,19 @@ class MainWindow:
         tree_frame = ttk.Frame(queue_frame)
         tree_frame.pack(fill=tk.BOTH, expand=True)
         
-        columns = ("Fichier", "Codec", "Qualité", "Progrès", "Statut")
+        columns = ("Fichier", "Codec", "Qualité", "Progrès", "Statut", "Serveur")
         self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", height=10)
         
         for col in columns:
             self.tree.heading(col, text=col)
             if col == "Fichier":
-                self.tree.column(col, width=200)
+                self.tree.column(col, width=250)
+            elif col == "Codec":
+                self.tree.column(col, width=80, anchor=tk.CENTER)
+            elif col == "Qualité":
+                self.tree.column(col, width=80, anchor=tk.CENTER)
             elif col == "Progrès":
-                self.tree.column(col, width=80)
+                self.tree.column(col, width=80, anchor=tk.CENTER)
             else:
                 self.tree.column(col, width=100)
         
@@ -743,6 +749,26 @@ class MainWindow:
                 # // Des serveurs distants sont configurés mais aucun n'est connecté.
                 self.servers_var.set(f"🔴 Serveurs distants déconnectés - {total_jobs} jobs (local)")
 
+        self._update_server_map_and_status(connected_servers)
+
+    def _update_server_map_and_status(self, connected_servers: List[ServerInfo]):
+        """Met à jour le dictionnaire des serveurs et la barre de statut."""
+        self.server_map.clear()
+        local_server = self.job_scheduler.get_local_server_info()
+        if local_server:
+            self.server_map[local_server.server_id] = local_server.name
+        
+        all_servers = self.server_discovery.get_all_servers()
+        for server_id, server_info in all_servers.items():
+            self.server_map[server_id] = server_info.name
+            
+        self.update_server_status(connected_servers)
+        
+        # Mettre à jour les jobs existants pour refléter les noms de serveur
+        for job_id in self.tree.get_children():
+            if job_id in self.job_rows:
+                self._update_job_row(self.job_rows[job_id]["job"])
+
     def open_server_manager(self):
         ServerManagerWindow(self.root, self.server_discovery, self.loop, self.run_async_func)
 
@@ -919,7 +945,40 @@ class MainWindow:
                 initial_dst_path = p.parent / f"{stem}{suffix}.{container}"
 
             output_cfg = OutputConfig(name="Default", initial_dst_path=initial_dst_path, mode=mode)
-            output_cfg.encoder = self._get_encoder_name_from_display(self.global_encoder_var.get())
+            
+            # Appliquer les paramètres actuels de l'UI
+            encoder_display = self.global_encoder_var.get()
+            encoder_name = self._get_encoder_name_from_display(encoder_display) if encoder_display else ""
+            
+            # Si pas d'encodeur spécifié, utiliser un encodeur par défaut basé sur le codec
+            if not encoder_name:
+                codec = self.global_codec_var.get()
+                if codec == "webp":
+                    encoder_name = "libwebp"
+                elif codec == "h264":
+                    encoder_name = "libx264"
+                elif codec == "hevc":
+                    encoder_name = "libx265"
+                elif codec == "av1":
+                    encoder_name = "libaom-av1"
+                elif codec == "vp9":
+                    encoder_name = "libvpx-vp9"
+                elif codec == "jpegxl":
+                    encoder_name = "libjxl"
+                elif codec == "heic":
+                    encoder_name = "libx265"
+                elif codec == "avif":
+                    encoder_name = "libaom-av1"
+                elif codec == "flac":
+                    encoder_name = "flac"
+                elif codec == "aac":
+                    encoder_name = "aac"
+                elif codec == "mp3":
+                    encoder_name = "libmp3lame"
+                else:
+                    encoder_name = "libx264"  # Défaut général
+            
+            output_cfg.encoder = encoder_name
             output_cfg.container = container
             output_cfg.quality = self.quality_var.get()
             output_cfg.cq_value = self.cq_var.get()
@@ -945,17 +1004,25 @@ class MainWindow:
                  job.relative_src_path = Path(p.name)
 
             self.jobs.append(job)
-            job_internal_id = str(id(job))
+            job_id = job.job_id # Utiliser l'UUID du job comme identifiant unique
 
             display_encoder = output_cfg.encoder or "-"
             display_quality = output_cfg.quality or output_cfg.cq_value or output_cfg.bitrate or "-"
 
-            self.tree.insert("", "end", iid=job_internal_id, values=(p.name, display_encoder, display_quality, "0%", "pending"))
-            self.job_rows[job_internal_id] = {"job": job}
-            current_batch_job_ids.append(job_internal_id)
+            self.tree.insert("", "end", iid=job_id, values=(p.name, display_encoder, display_quality, "0%", "pending", "-"))
+            self.job_rows[job_id] = {"job": job}
+            current_batch_job_ids.append(job_id)
         
         if current_batch_job_ids:
             self.last_import_job_ids = current_batch_job_ids
+            
+            # Appliquer les paramètres UI actuels aux nouveaux jobs
+            for job_id in current_batch_job_ids:
+                job_data = self.job_rows.get(job_id)
+                if job_data:
+                    job = job_data["job"]
+                    self._apply_ui_settings_to_job(job)
+                    self._update_job_row(job)
 
         self._update_job_selector_combobox()
         self._update_control_buttons_state('idle')
@@ -1127,9 +1194,10 @@ class MainWindow:
         """Ouvre une fenêtre de dialogue pour sélectionner le serveur de destination."""
         dialog = tk.Toplevel(self.root)
         dialog.title("Réassigner Jobs")
-        dialog.geometry("500x400")
+        dialog.geometry("600x500")
         dialog.transient(self.root)
         dialog.grab_set()
+        dialog.resizable(True, True)
         
         main_frame = ttk.Frame(dialog, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=True)
@@ -1159,7 +1227,7 @@ class MainWindow:
         server_info_dict = {}
         
         for server in connected_servers:
-            server_name = f"{server.name} ({server.ip}:{server.port})"
+            server_name = f"{server.name} ({getattr(server, 'host', getattr(server, 'ip', 'unknown'))}:{server.port})"
             server_info_dict[server_name] = server
         
         server_names = list(server_info_dict.keys())
@@ -1175,36 +1243,52 @@ class MainWindow:
         
         def update_server_info(*args):
             """Met à jour les informations du serveur sélectionné."""
-            selected_name = server_var.get()
-            if selected_name in server_info_dict:
-                server = server_info_dict[selected_name]
-                
-                info_text.config(state=tk.NORMAL)
-                info_text.delete(1.0, tk.END)
-                
-                info_lines = [
-                    f"Statut: {server.status.value}",
-                    f"Jobs actifs: {server.current_jobs}/{server.max_jobs}",
-                    f"CPU: {server.capabilities.cpu_cores} cœurs ({server.capabilities.current_load:.1%} charge)",
-                    f"RAM: {server.capabilities.memory_gb:.1f} GB",
-                    "",
-                    "Encodeurs logiciels:",
-                    f"  {', '.join(server.capabilities.software_encoders) if server.capabilities.software_encoders else 'Aucun'}",
-                    "",
-                    "Encodeurs matériels:"
-                ]
-                
-                if server.capabilities.hardware_encoders:
-                    for hw_type, encoders in server.capabilities.hardware_encoders.items():
-                        if encoders:
-                            info_lines.append(f"  {hw_type.upper()}: {', '.join(encoders)}")
+            try:
+                selected_name = server_var.get()
+                if selected_name and selected_name in server_info_dict:
+                    server = server_info_dict[selected_name]
+                    
+                    info_text.config(state=tk.NORMAL)
+                    info_text.delete(1.0, tk.END)
+                    
+                    info_lines = [
+                        f"Statut: {getattr(server.status, 'value', 'inconnu')}",
+                        f"Jobs actifs: {getattr(server, 'current_jobs', 0)}/{getattr(server, 'max_jobs', '?')}",
+                        f"CPU: {getattr(server.capabilities, 'cpu_cores', '?')} cœurs" + 
+                              (f" ({server.capabilities.current_load:.1%} charge)" if hasattr(server.capabilities, 'current_load') else ""),
+                        f"RAM: {getattr(server.capabilities, 'memory_gb', '?')} GB" if hasattr(server, 'capabilities') else "RAM: ?",
+                        "",
+                        "Encodeurs logiciels:",
+                        f"  {', '.join(server.capabilities.software_encoders) if hasattr(server, 'capabilities') and server.capabilities.software_encoders else 'Aucun'}",
+                        "",
+                        "Encodeurs matériels:"
+                    ]
+                    
+                    if hasattr(server, 'capabilities') and server.capabilities and server.capabilities.hardware_encoders:
+                        for hw_type, encoders in server.capabilities.hardware_encoders.items():
+                            if encoders:
+                                info_lines.append(f"  {hw_type.upper()}: {', '.join(encoders)}")
+                    else:
+                        info_lines.append("  Aucun")
+                    
+                    info_text.insert(1.0, "\n".join(info_lines))
+                    info_text.config(state=tk.DISABLED)
                 else:
-                    info_lines.append("  Aucun")
-                
-                info_text.insert(1.0, "\n".join(info_lines))
-                info_text.config(state=tk.DISABLED)
+                    info_text.config(state=tk.NORMAL)
+                    info_text.delete(1.0, tk.END)
+                    info_text.insert(1.0, "Aucun serveur sélectionné")
+                    info_text.config(state=tk.DISABLED)
+            except Exception as e:
+                # Protection contre les erreurs lors de l'accès aux propriétés du serveur
+                try:
+                    info_text.config(state=tk.NORMAL)
+                    info_text.delete(1.0, tk.END)
+                    info_text.insert(1.0, f"Erreur lors de l'affichage: {e}")
+                    info_text.config(state=tk.DISABLED)
+                except:
+                    pass  # Si même ça échoue, on ignore
         
-        server_var.trace('w', update_server_info)
+        server_combo.bind('<<ComboboxSelected>>', lambda e: update_server_info())
         update_server_info()  # Mise à jour initiale
         
         # Boutons
@@ -1548,7 +1632,8 @@ class MainWindow:
                 encoder,
                 quality_val,
                 f"{progress:.1f}%",
-                status
+                status,
+                self.server_map.get(job.assigned_to, "En attente...") if job.assigned_to else "En attente..."
             ))
 
     def _update_overall_progress(self):
@@ -1694,7 +1779,40 @@ class MainWindow:
 
     def _apply_ui_settings_to_job(self, job):
         """Applique les paramètres de l'UI à un job"""
-        pass
+        if not job.outputs:
+            # Créer un OutputConfig par défaut si aucun n'existe
+            from core.encode_job import OutputConfig
+            output_name = f"{job.src_path.stem} - Default"
+            dst_path = job.src_path.with_suffix(f".{self.container_var.get()}")
+            output_cfg = OutputConfig(output_name, dst_path, job.mode)
+            job.outputs.append(output_cfg)
+        
+        # Appliquer les paramètres UI au premier output
+        output_cfg = job.outputs[0]
+        
+        # Mettre à jour le mode de job si nécessaire
+        job.mode = self.global_type_var.get()
+        output_cfg.mode = job.mode
+        
+        # Encodeur et codec
+        encoder_display = self.global_encoder_var.get()
+        output_cfg.encoder = self._get_encoder_name_from_display(encoder_display)
+        
+        # Container et chemin de destination
+        container = self.container_var.get()
+        output_cfg.container = container
+        if container:
+            output_cfg.dst_path = job.src_path.with_suffix(f".{container}")
+        
+        # Paramètres de qualité
+        output_cfg.video_mode = self.video_mode_var.get()
+        output_cfg.quality = self.quality_var.get()
+        output_cfg.bitrate = self.bitrate_var.get()
+        output_cfg.multipass = self.multipass_var.get()
+        output_cfg.preset = self.preset_var.get()
+        
+        # Paramètres personnalisés
+        output_cfg.custom_flags = self.custom_flags_var.get()
 
     def _cancel_all(self):
         """Annule tous les jobs en cours"""
@@ -1839,7 +1957,7 @@ class MainWindow:
         elif media_type == "audio":
             containers = ["m4a", "mp3", "opus", "flac", "ogg"]
         elif media_type == "image":
-            containers = ["png", "jpg", "webp", "avif"]
+            containers = ["png", "jpg", "webp", "avif", "jxl", "heic"]
         else:
             containers = []
         
@@ -1878,6 +1996,24 @@ class MainWindow:
         compatible_local = [
             f"{enc['name']} - {enc['description']}" for enc in local_encoders if enc['codec'] == selected_codec
         ]
+        
+        # Ajouter des encodeurs par défaut si aucun n'est trouvé pour certains codecs
+        if not compatible_local:
+            fallback_encoders = {
+                'webp': 'libwebp - WebP encoder',
+                'jpegxl': 'libjxl - JPEG XL encoder', 
+                'heic': 'libx265 - HEIC encoder',
+                'avif': 'libaom-av1 - AVIF encoder',
+                'png': 'png - PNG encoder',
+                'jpeg': 'mjpeg - JPEG encoder',
+                'h264': 'libx264 - H.264 encoder',
+                'hevc': 'libx265 - H.265/HEVC encoder',
+                'aac': 'aac - AAC encoder',
+                'flac': 'flac - FLAC encoder',
+                'mp3': 'libmp3lame - MP3 encoder'
+            }
+            if selected_codec in fallback_encoders:
+                compatible_local = [fallback_encoders[selected_codec]]
 
         # 2. Encodeurs matériels distants
         remote_encoders: list[str] = []
@@ -1930,6 +2066,20 @@ class MainWindow:
                 self.video_mode_radio_quality.config(text="Qualité JPEG (1-100)")
                 self.quality_var.set(optimal_quality)
                 self.cq_entry.config(state="normal")
+            elif 'jpegxl' in encoder.lower() or 'jxl' in encoder.lower():
+                # JPEGXL: distance 0.0-15.0 (0.0=lossless, 1.0=très bonne qualité)
+                self.video_mode_radio_quality.config(text="Distance JPEGXL (0.0-15.0, 0.0=lossless)")
+                self.quality_var.set(optimal_quality)
+                self.cq_entry.config(state="normal")
+                self.video_mode_radio_bitrate.config(state="disabled")
+                self.bitrate_entry.config(state="disabled")
+            elif 'heic' in encoder.lower():
+                # HEIC: CRF 0-51 (comme HEVC)
+                self.video_mode_radio_quality.config(text="Qualité HEIC (CRF 0-51)")
+                self.quality_var.set(optimal_quality)
+                self.cq_entry.config(state="normal")
+                self.video_mode_radio_bitrate.config(state="disabled")
+                self.bitrate_entry.config(state="disabled")
             else:
                 # PNG et autres : pas de contrôle qualité
                 self.video_mode_radio_quality.config(text="Qualité (N/A pour PNG)")
@@ -2002,6 +2152,10 @@ class MainWindow:
                 return "23"   # CRF AVIF optimal
             elif 'jpeg' in encoder_lower:
                 return "85"   # Qualité JPEG très bonne
+            elif 'jpegxl' in encoder_lower or 'jxl' in encoder_lower:
+                return "1.0"  # Distance JPEGXL très bonne qualité
+            elif 'heic' in encoder_lower:
+                return "23"   # CRF HEIC optimal (comme HEVC)
             return "90"   # Défaut général
             
         return "22"  # Défaut global
