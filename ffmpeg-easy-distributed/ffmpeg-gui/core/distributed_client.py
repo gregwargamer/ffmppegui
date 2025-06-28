@@ -230,7 +230,7 @@ class DistributedClient:
         websocket = self.active_connections.get(uri)
         
         # Vérifier si la connexion est active et ouverte
-        if not websocket or getattr(websocket, 'closed', True):
+        if not websocket or getattr(websocket, 'closed', False):
             self.logger.error(f"Connexion au serveur {server_id} non active.")
             return False
 
@@ -280,7 +280,7 @@ class DistributedClient:
         websocket = self.active_connections.get(uri)
         
         # Vérifier si la connexion est active et ouverte
-        if not websocket or getattr(websocket, 'closed', True):
+        if not websocket or getattr(websocket, 'closed', False):
             self.logger.error(f"Connexion au serveur {server_id} non active.")
             return None
 
@@ -313,7 +313,7 @@ class DistributedClient:
         websocket = self.active_connections.get(uri)
         
         # Vérifier si la connexion est active et ouverte
-        if not websocket or getattr(websocket, 'closed', True):
+        if not websocket or getattr(websocket, 'closed', False):
             self.logger.warning(f"Connexion au serveur {server_id} non active pour ping.")
             return False
 

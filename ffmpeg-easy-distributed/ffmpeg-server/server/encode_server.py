@@ -77,7 +77,7 @@ class EncodeServer:
             for client in self.clients.values():
                 try:
                     # Vérifier que la connexion n'est pas déjà fermée avant de tenter de la fermer
-                    if not getattr(client, 'closed', True):
+                    if not getattr(client, 'closed', False):
                         client_close_tasks.append(client.close(code=1001, reason="Server shutting down"))
                 except Exception as e:
                     self.logger.warning(f"Erreur lors de la fermeture d'un client: {e}")
@@ -296,7 +296,7 @@ class EncodeServer:
             websocket = self.clients[client_id]
             try:
                 # Vérifier l'état de la connexion WebSocket (compatible avec websockets 15.x)
-                if getattr(websocket, 'closed', True):
+                if getattr(websocket, 'closed', False):
                     self.logger.warning(f"Connexion WebSocket fermée pour client {client_id}, suppression du cache")
                     del self.clients[client_id]
                     return
@@ -336,7 +336,7 @@ class EncodeServer:
             websocket = self.clients[client_id]
             try:
                 # Vérifier l'état de la connexion WebSocket (compatible avec websockets 15.x)
-                if getattr(websocket, 'closed', True):
+                if getattr(websocket, 'closed', False):
                     self.logger.warning(f"Connexion WebSocket fermée pour client {client_id}, suppression du cache")
                     del self.clients[client_id]
                     return
