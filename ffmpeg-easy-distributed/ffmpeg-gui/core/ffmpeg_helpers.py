@@ -128,8 +128,8 @@ class FFmpegHelpers:
                 image.update(["png", "mjpeg", "jpg", "webp", "tiff", "bmp", "gif", "avif", "jpegxl", "heic"])
 
                 cls._codecs_cache = {
-                    "video": sorted(list(video)) or ["h264", "hevc", "vp9", "av1", "mpeg4"],
-                    "audio": sorted(list(audio)) or ["aac", "mp3", "opus", "flac"],
+                    "video": ["h264", "hevc", "vp9", "av1"] + sorted([x for x in list(video) if x not in ["h264", "hevc", "vp9", "av1"]]) or ["h264", "hevc", "vp9", "av1", "mpeg4"],
+                    "audio": ["aac", "mp3", "opus", "flac"] + sorted([x for x in list(audio) if x not in ["aac", "mp3", "opus", "flac"]]) or ["aac", "mp3", "opus", "flac"],
                     "image": ["webp", "png", "jpeg", "avif", "jpegxl", "heic"] + sorted([x for x in list(image) if x not in ["webp", "png", "jpeg", "avif", "jpegxl", "heic"]]) or ["webp", "png", "jpeg", "bmp", "jpegxl", "heic"]
                 }
             except (FileNotFoundError, subprocess.CalledProcessError) as e:

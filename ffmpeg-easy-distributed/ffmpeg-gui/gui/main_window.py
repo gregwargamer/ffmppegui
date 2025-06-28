@@ -2382,17 +2382,14 @@ class MainWindow:
         codec_to_use = codec if codec is not None else self.global_codec_var.get()
 
         self.logger.debug(f"Updating encoder choices for codec: {codec_to_use}")
-        print(f"DEBUG: _update_encoder_choices called with codec='{codec_to_use}'")
 
         if not codec_to_use:
             self.global_encoder_combo['values'] = []
             self.global_encoder_var.set("")
-            print("DEBUG: No codec specified, clearing encoder choices")
             return
 
         # 1. Encodeurs locaux compatibles
         local_encoders_info = FFmpegHelpers.available_encoders() # Expect list of dicts
-        print(f"DEBUG: Found {len(local_encoders_info)} total encoders")
         
         compatible_local = [
             f"{enc['name']} - {enc['description']}"
@@ -2400,13 +2397,8 @@ class MainWindow:
             if enc.get('codec') == codec_to_use # Use .get for safety
         ]
         
-        print(f"DEBUG: Found {len(compatible_local)} compatible encoders for codec '{codec_to_use}':")
-        for enc in compatible_local:
-            print(f"DEBUG:   - {enc}")
-        
         # Ajouter des encodeurs par défaut si aucun n'est trouvé pour certains codecs
         if not compatible_local:
-            print(f"DEBUG: No compatible encoders found, checking fallbacks...")
             fallback_encoders = {
                 'webp': 'libwebp - WebP encoder',
                 'jpegxl': 'libjxl - JPEG XL encoder', 
@@ -2433,7 +2425,6 @@ class MainWindow:
             }
             if codec_to_use in fallback_encoders:
                 compatible_local = [fallback_encoders[codec_to_use]]
-                print(f"DEBUG: Using fallback encoder: {fallback_encoders[codec_to_use]}")
 
         # 2. Encodeurs matériels distants
         remote_encoders_list: list[str] = [] # Renamed to avoid conflict
@@ -2466,23 +2457,16 @@ class MainWindow:
                             remote_encoders_list.append(f"{server.name}: {hw_enc_name}")
 
         all_encoders = compatible_local + list(set(remote_encoders_list)) # list(set()) to remove duplicates
-        print(f"DEBUG: Total encoders available: {len(all_encoders)}")
-        for i, enc in enumerate(all_encoders):
-            print(f"DEBUG: [{i}] {enc}")
 
         current_encoder_val = self.global_encoder_var.get() # Preserve current if valid
         self.global_encoder_combo['values'] = all_encoders
-        print(f"DEBUG: Setting encoder combo values to: {all_encoders}")
 
         if current_encoder_val and current_encoder_val in all_encoders:
             self.global_encoder_var.set(current_encoder_val)
-            print(f"DEBUG: Preserving current encoder: {current_encoder_val}")
         elif all_encoders:
             self.global_encoder_var.set(all_encoders[0])
-            print(f"DEBUG: Setting encoder to first available: {all_encoders[0]}")
         else:
             self.global_encoder_var.set("")
-            print("DEBUG: No encoders available, clearing encoder selection")
 
         # Orchestrating method will call subsequent updates like _update_container_choices and _update_quality_preset_controls.
 
