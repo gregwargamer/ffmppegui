@@ -11,6 +11,8 @@ from tkinter import (Checkbutton, DoubleVar, Frame, IntVar, Listbox, Menu,
                    filedialog, messagebox, simpledialog, ttk)
 import tkinter as tk
 from typing import Optional, List
+import uuid
+import logging
 
 #j'ajoute dynamiquement le chemin racine du projet au PYTHONPATH
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -122,6 +124,7 @@ class MainWindow:
         self.settings = load_settings()
         self.loop = loop
         self.run_async_func = run_async_func
+        self.logger = logging.getLogger(__name__)
 
         self.server_discovery.register_server_update_callback(self.update_server_status)
 
@@ -230,6 +233,7 @@ class MainWindow:
         self.cancel_btn.pack(side=tk.LEFT, padx=(0, 5))
         
         ttk.Button(control_frame, text="Clear Queue", command=self._clear_queue).pack(side=tk.LEFT)
+        ttk.Button(control_frame, text="Réassigner", command=self._reassign_selected_jobs).pack(side=tk.LEFT, padx=(5, 0))
         
         self.context_menu = Menu(self.root, tearoff=0)
         self.context_menu.add_command(label="Modifier", command=self._edit_selected_job)
@@ -668,6 +672,7 @@ class MainWindow:
         edit_menu.add_command(label="Subtitles...", command=self._manage_subtitles)
         edit_menu.add_separator()
         edit_menu.add_command(label="Clear Queue", command=self._clear_queue)
+        edit_menu.add_command(label="Réassigner Jobs...", command=self._reassign_selected_jobs)
         edit_menu.add_separator()
         edit_menu.add_command(label="Merge Videos", command=self._merge_videos)
         self.menubar.add_cascade(label="Edit", menu=edit_menu)
@@ -1090,6 +1095,247 @@ class MainWindow:
         for item in self.tree.get_children():
             self.tree.delete(item)
         self.job_rows.clear()
+
+    def _reassign_selected_jobs(self):
+        """Réassigne les jobs sélectionnés à un serveur spécifique."""
+        selected_items = self.tree.selection()
+        if not selected_items:
+            messagebox.showwarning("Aucune sélection", "Veuillez sélectionner un ou plusieurs jobs dans la file d'attente.")
+            return
+        
+        # Récupérer les jobs correspondants
+        selected_jobs = []
+        for item_id in selected_items:
+            job_data = self.job_rows.get(item_id)
+            if job_data and "job" in job_data:
+                selected_jobs.append(job_data["job"])
+        
+        if not selected_jobs:
+            messagebox.showerror("Erreur", "Impossible de trouver les jobs sélectionnés.")
+            return
+        
+        # Obtenir la liste des serveurs connectés
+        connected_servers = self.distributed_client.get_connected_servers()
+        if not connected_servers:
+            messagebox.showwarning("Aucun serveur", "Aucun serveur distribué connecté pour la réassignation.")
+            return
+        
+        # Ouvrir la fenêtre de sélection de serveur
+        self._open_server_selection_dialog(selected_jobs, connected_servers)
+    
+    def _open_server_selection_dialog(self, selected_jobs: list, connected_servers: list):
+        """Ouvre une fenêtre de dialogue pour sélectionner le serveur de destination."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Réassigner Jobs")
+        dialog.geometry("500x400")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        main_frame = ttk.Frame(dialog, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Information sur les jobs sélectionnés
+        info_frame = ttk.LabelFrame(main_frame, text="Jobs Sélectionnés", padding="5")
+        info_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        job_list = ttk.Label(info_frame, text=f"{len(selected_jobs)} job(s) sélectionné(s):")
+        job_list.pack(anchor="w")
+        
+        for i, job in enumerate(selected_jobs[:3]):  # Afficher max 3 noms
+            job_label = ttk.Label(info_frame, text=f"• {job.src_path.name}")
+            job_label.pack(anchor="w", padx=(10, 0))
+        
+        if len(selected_jobs) > 3:
+            more_label = ttk.Label(info_frame, text=f"• ... et {len(selected_jobs) - 3} autre(s)")
+            more_label.pack(anchor="w", padx=(10, 0))
+        
+        # Sélection du serveur
+        server_frame = ttk.LabelFrame(main_frame, text="Serveur de Destination", padding="5")
+        server_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(server_frame, text="Sélectionnez le serveur :").pack(anchor="w", pady=(0, 5))
+        
+        server_var = tk.StringVar()
+        server_info_dict = {}
+        
+        for server in connected_servers:
+            server_name = f"{server.name} ({server.ip}:{server.port})"
+            server_info_dict[server_name] = server
+        
+        server_names = list(server_info_dict.keys())
+        server_combo = ttk.Combobox(server_frame, textvariable=server_var, 
+                                   values=server_names, state="readonly", width=50)
+        server_combo.pack(fill=tk.X, pady=(0, 10))
+        if server_names:
+            server_var.set(server_names[0])
+        
+        # Informations du serveur sélectionné
+        info_text = tk.Text(server_frame, height=8, wrap=tk.WORD, state=tk.DISABLED)
+        info_text.pack(fill=tk.BOTH, expand=True)
+        
+        def update_server_info(*args):
+            """Met à jour les informations du serveur sélectionné."""
+            selected_name = server_var.get()
+            if selected_name in server_info_dict:
+                server = server_info_dict[selected_name]
+                
+                info_text.config(state=tk.NORMAL)
+                info_text.delete(1.0, tk.END)
+                
+                info_lines = [
+                    f"Statut: {server.status.value}",
+                    f"Jobs actifs: {server.current_jobs}/{server.max_jobs}",
+                    f"CPU: {server.capabilities.cpu_cores} cœurs ({server.capabilities.current_load:.1%} charge)",
+                    f"RAM: {server.capabilities.memory_gb:.1f} GB",
+                    "",
+                    "Encodeurs logiciels:",
+                    f"  {', '.join(server.capabilities.software_encoders) if server.capabilities.software_encoders else 'Aucun'}",
+                    "",
+                    "Encodeurs matériels:"
+                ]
+                
+                if server.capabilities.hardware_encoders:
+                    for hw_type, encoders in server.capabilities.hardware_encoders.items():
+                        if encoders:
+                            info_lines.append(f"  {hw_type.upper()}: {', '.join(encoders)}")
+                else:
+                    info_lines.append("  Aucun")
+                
+                info_text.insert(1.0, "\n".join(info_lines))
+                info_text.config(state=tk.DISABLED)
+        
+        server_var.trace('w', update_server_info)
+        update_server_info()  # Mise à jour initiale
+        
+        # Boutons
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        def confirm_reassignment():
+            selected_server_name = server_var.get()
+            if not selected_server_name:
+                messagebox.showwarning("Erreur", "Veuillez sélectionner un serveur.")
+                return
+            
+            target_server = server_info_dict[selected_server_name]
+            
+            # Vérifier la compatibilité avant réassignation
+            incompatible_jobs = []
+            for job in selected_jobs:
+                if not self._check_job_server_compatibility(job, target_server):
+                    incompatible_jobs.append(job.src_path.name)
+            
+            if incompatible_jobs:
+                warning_msg = f"Attention : {len(incompatible_jobs)} job(s) peuvent être incompatibles :\n"
+                warning_msg += "\n".join(f"• {name}" for name in incompatible_jobs[:5])
+                if len(incompatible_jobs) > 5:
+                    warning_msg += f"\n• ... et {len(incompatible_jobs) - 5} autre(s)"
+                warning_msg += "\n\nContinuer quand même ?"
+                
+                if not messagebox.askyesno("Compatibilité", warning_msg):
+                    return
+            
+            # Effectuer la réassignation
+            self.run_async_func(self._perform_jobs_reassignment(selected_jobs, target_server), self.loop)
+            dialog.destroy()
+        
+        ttk.Button(button_frame, text="Réassigner", command=confirm_reassignment).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(button_frame, text="Annuler", command=dialog.destroy).pack(side=tk.RIGHT)
+        
+        # Donner le focus à la combobox
+        dialog.after(100, lambda: server_combo.focus_set())
+    
+    def _check_job_server_compatibility(self, job, server) -> bool:
+        """Vérifie si un job est compatible avec un serveur."""
+        # Récupérer l'encodeur du premier output du job
+        if not job.outputs:
+            return True  # Pas d'output configuré, on assume compatible
+        
+        encoder = job.outputs[0].encoder
+        if not encoder:
+            return True  # Pas d'encodeur spécifié
+        
+        # Vérifier si l'encodeur est disponible sur le serveur
+        all_server_encoders = (
+            server.capabilities.software_encoders +
+            [enc for encoders in server.capabilities.hardware_encoders.values() for enc in encoders]
+        )
+        
+        return encoder in all_server_encoders
+    
+    async def _perform_jobs_reassignment(self, jobs: list, target_server):
+        """Effectue la réassignation asynchrone des jobs vers le serveur cible."""
+        success_count = 0
+        error_count = 0
+        
+        for job in jobs:
+            try:
+                # Convertir le job en JobConfiguration pour le système distribué
+                job_config = self._convert_job_to_distributed_config(job, target_server)
+                
+                # Soumettre le job au serveur spécifié
+                success = await self.distributed_client.send_job_to_server(
+                    target_server.server_id, 
+                    job_config,
+                    lambda progress: self._on_job_progress(progress),
+                    lambda result: self._on_job_completion(result)
+                )
+                
+                if success:
+                    success_count += 1
+                    # Mettre à jour l'affichage du job
+                    self._update_job_status_display(job, f"Assigné à {target_server.name}")
+                else:
+                    error_count += 1
+                    
+            except Exception as e:
+                self.logger.error(f"Erreur lors de la réassignation du job {job.src_path.name}: {e}")
+                error_count += 1
+        
+        # Afficher le résultat
+        if success_count > 0:
+            message = f"✅ {success_count} job(s) réassigné(s) avec succès à {target_server.name}"
+            if error_count > 0:
+                message += f"\n❌ {error_count} job(s) en erreur"
+            messagebox.showinfo("Réassignation Terminée", message)
+        else:
+            messagebox.showerror("Erreur", f"Impossible de réassigner les jobs à {target_server.name}")
+    
+    def _convert_job_to_distributed_config(self, job, target_server):
+        """Convertit un EncodeJob local en JobConfiguration pour le système distribué."""
+        from shared.messages import JobConfiguration, EncoderType
+        
+        # Utiliser le premier output comme référence
+        output_cfg = job.outputs[0] if job.outputs else None
+        
+        return JobConfiguration(
+            job_id=str(uuid.uuid4()),
+            input_file=str(job.src_path),
+            output_file=str(output_cfg.dst_path) if output_cfg else str(job.src_path.with_suffix('.out')),
+            encoder=output_cfg.encoder if output_cfg else 'libx264',
+            encoder_type=EncoderType.SOFTWARE,  # Sera déterminé côté serveur
+            preset=output_cfg.preset if output_cfg else None,
+            quality_mode=output_cfg.video_mode if output_cfg else 'quality',
+            quality_value=output_cfg.quality if output_cfg else '22',
+            filters=[],
+            ffmpeg_args=[],
+            required_capabilities=[],
+            priority=5,
+            estimated_duration=None,
+            file_size=job.src_path.stat().st_size if job.src_path.exists() else 0,
+            resolution="1920x1080",  # Valeur par défaut
+            codec=output_cfg.encoder.split('_')[0] if output_cfg and output_cfg.encoder else 'h264',
+            container=output_cfg.container if output_cfg else 'mp4'
+        )
+    
+    def _update_job_status_display(self, job, status_text: str):
+        """Met à jour l'affichage du statut d'un job dans la TreeView."""
+        job_id = job.job_id
+        if job_id in self.tree.get_children():
+            current_values = list(self.tree.item(job_id)['values'])
+            if len(current_values) >= 5:
+                current_values[4] = status_text  # Colonne statut
+                self.tree.item(job_id, values=current_values)
 
     def _save_preset(self):
         preset_name = simpledialog.askstring("Sauvegarder le Préréglage", "Nom du préréglage:", parent=self.root)
@@ -1635,7 +1881,8 @@ class MainWindow:
 
         # 2. Encodeurs matériels distants
         remote_encoders: list[str] = []
-        for server in self.server_discovery.get_all_servers().values():
+        connected_servers = self.distributed_client.get_connected_servers()
+        for server in connected_servers:
             if getattr(server, 'status', None) == 'online':
                 hw_list = server.capabilities.hardware_encoders.get('all', []) if server.capabilities else []
                 for hw in hw_list:
@@ -1658,6 +1905,103 @@ class MainWindow:
 
     def _update_quality_controls_for_global(self):
         """Met à jour les contrôles de qualité en fonction du type de média et de l'encodeur sélectionné."""
-        # Cette fonction peut être étendue pour gérer les spécificités par encodeur
-        # Pour l'instant, elle ne fait rien de spécial mais évite l'AttributeError
-        pass
+        media_type = self.global_type_var.get()
+        encoder = self._get_encoder_name_from_display(self.global_encoder_var.get())
+        codec = self.global_codec_var.get()
+        
+        # Mise à jour des labels et plages selon le codec/encodeur
+        optimal_quality = self._get_optimal_quality_for_codec(encoder, media_type)
+        
+        if media_type == "image":
+            if 'webp' in encoder.lower():
+                # WebP: qualité 0-100 (100 = lossless)
+                self.video_mode_radio_quality.config(text="Qualité WebP (0-100, 100=lossless)")
+                self.quality_var.set(optimal_quality)
+                self.cq_entry.config(state="normal")
+                self.video_mode_radio_bitrate.config(state="disabled")
+                self.bitrate_entry.config(state="disabled")
+            elif 'avif' in encoder.lower():
+                # AVIF: CRF 0-63
+                self.video_mode_radio_quality.config(text="Qualité AVIF (CRF 0-63)")
+                self.quality_var.set(optimal_quality)
+                self.cq_entry.config(state="normal")
+            elif 'jpeg' in encoder.lower():
+                # JPEG: qualité 1-100
+                self.video_mode_radio_quality.config(text="Qualité JPEG (1-100)")
+                self.quality_var.set(optimal_quality)
+                self.cq_entry.config(state="normal")
+            else:
+                # PNG et autres : pas de contrôle qualité
+                self.video_mode_radio_quality.config(text="Qualité (N/A pour PNG)")
+                self.cq_entry.config(state="disabled")
+                self.video_mode_radio_bitrate.config(state="disabled")
+                
+        elif media_type == "audio":
+            if 'flac' in encoder.lower():
+                # FLAC: niveau compression 0-12
+                self.video_mode_radio_quality.config(text="Niveau Compression FLAC (0-12)")
+                self.quality_var.set(optimal_quality)
+                self.cq_entry.config(state="normal")
+                self.video_mode_radio_bitrate.config(state="disabled")
+                self.bitrate_entry.config(state="disabled")
+            elif 'alac' in encoder.lower() or 'wav' in encoder.lower():
+                # Codecs lossless : pas de contrôle qualité
+                self.video_mode_radio_quality.config(text="Lossless (pas de paramètres)")
+                self.cq_entry.config(state="disabled")
+                self.video_mode_radio_bitrate.config(state="disabled")
+            else:
+                # AAC, MP3, Opus : bitrate
+                self.video_mode_radio_quality.config(text="Qualité Variable (VBR)")
+                self.video_mode_radio_bitrate.config(text="Bitrate Constant (CBR)")
+                self.video_mode_radio_bitrate.config(state="normal")
+                self.bitrate_var.set(optimal_quality)
+                
+        elif media_type == "video":
+            # Conserver le comportement existant pour la vidéo
+            if 'nvenc' in encoder or 'qsv' in encoder or 'amf' in encoder or 'videotoolbox' in encoder:
+                self.video_mode_radio_quality.config(text="Qualité Constante (CQ)")
+            else:
+                self.video_mode_radio_quality.config(text="Qualité Constante (CRF)")
+            self.quality_var.set(optimal_quality)
+                
+        # Déclencher la mise à jour de l'état des contrôles
+        self._on_video_mode_change()
+
+    def _get_optimal_quality_for_codec(self, encoder: str, media_type: str) -> str:
+        """Retourne une valeur de qualité optimale par défaut pour un encodeur donné."""
+        encoder_lower = encoder.lower()
+        
+        if media_type == "video":
+            if 'x264' in encoder_lower or 'x265' in encoder_lower:
+                return "22"  # CRF optimal pour x264/x265
+            elif 'nvenc' in encoder_lower:
+                return "20"  # CQ optimal pour NVENC
+            elif 'qsv' in encoder_lower:
+                return "23"  # CQ optimal pour QuickSync
+            elif 'av1' in encoder_lower:
+                return "25"  # CRF optimal pour AV1
+            elif 'vp9' in encoder_lower:
+                return "28"  # CRF optimal pour VP9
+            return "22"  # Défaut général
+            
+        elif media_type == "audio":
+            if 'flac' in encoder_lower:
+                return "8"   # Niveau compression FLAC optimal (équilibre vitesse/taille)
+            elif 'aac' in encoder_lower:
+                return "128"  # Bitrate AAC optimal
+            elif 'mp3' in encoder_lower:
+                return "192"  # Bitrate MP3 optimal
+            elif 'opus' in encoder_lower:
+                return "128"  # Bitrate Opus optimal
+            return "128"  # Défaut général
+            
+        elif media_type == "image":
+            if 'webp' in encoder_lower:
+                return "90"   # Qualité WebP très bonne sans être lossless
+            elif 'avif' in encoder_lower:
+                return "23"   # CRF AVIF optimal
+            elif 'jpeg' in encoder_lower:
+                return "85"   # Qualité JPEG très bonne
+            return "90"   # Défaut général
+            
+        return "22"  # Défaut global

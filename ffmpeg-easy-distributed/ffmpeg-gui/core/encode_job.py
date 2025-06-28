@@ -162,12 +162,138 @@ class EncodeJob:
 
         return f"EncodeJob({self.src_path.name}, {num_outputs} outputs, {self.get_overall_status()})"
 
-
-# The old EncodeJob methods like cancel(), pause(), resume() that acted on a single self.process
-# are now replaced by cancel_all_outputs(), pause_all_outputs(), resume_all_outputs()
-# which iterate over output_cfg.process.
-# The individual output_cfg.process, output_cfg.status, output_cfg.progress, output_cfg.is_paused
-# will be managed by the worker pool for each specific output task.
+    def get_media_info(self) -> Optional[Dict[str, Any]]:
+        """Récupère les informations du fichier média source."""
+        if not self.src_path.exists():
+            return None
+        
+        try:
+            # Utiliser ffprobe pour récupérer les informations du fichier
+            import json
+            result = subprocess.run([
+                'ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams',
+                str(self.src_path)
+            ], capture_output=True, text=True, timeout=10)
+            
+            if result.returncode != 0:
+                return None
+            
+            ffprobe_data = json.loads(result.stdout)
+            media_info = {}
+            
+            # Informations générales du fichier
+            if 'format' in ffprobe_data:
+                fmt = ffprobe_data['format']
+                media_info['format'] = fmt.get('format_name', 'Inconnu')
+                media_info['duration'] = self._format_duration(fmt.get('duration'))
+                media_info['size'] = self._format_file_size(fmt.get('size'))
+                media_info['bitrate'] = self._format_bitrate(fmt.get('bit_rate'))
+            
+            # Informations des streams
+            if 'streams' in ffprobe_data:
+                streams = ffprobe_data['streams']
+                video_streams = [s for s in streams if s.get('codec_type') == 'video']
+                audio_streams = [s for s in streams if s.get('codec_type') == 'audio']
+                
+                if video_streams:
+                    v = video_streams[0]  # Premier stream vidéo
+                    media_info['video_codec'] = v.get('codec_name', 'Inconnu')
+                    media_info['resolution'] = f"{v.get('width', '?')}x{v.get('height', '?')}"
+                    media_info['fps'] = self._format_fps(v.get('r_frame_rate'))
+                    media_info['pixel_format'] = v.get('pix_fmt', 'Inconnu')
+                
+                if audio_streams:
+                    a = audio_streams[0]  # Premier stream audio
+                    media_info['audio_codec'] = a.get('codec_name', 'Inconnu')
+                    media_info['audio_channels'] = a.get('channels', 'Inconnu')
+                    media_info['sample_rate'] = self._format_sample_rate(a.get('sample_rate'))
+                
+                media_info['nb_streams'] = len(streams)
+                media_info['video_streams'] = len(video_streams)
+                media_info['audio_streams'] = len(audio_streams)
+            
+            return media_info
+            
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, json.JSONDecodeError, FileNotFoundError):
+            # Fallback vers les informations basiques du fichier
+            return {
+                'filename': self.src_path.name,
+                'size': self._format_file_size(self.src_path.stat().st_size),
+                'extension': self.src_path.suffix,
+                'mode': self.mode
+            }
+    
+    def _format_duration(self, duration_str: Optional[str]) -> str:
+        """Formate la durée en format lisible."""
+        if not duration_str:
+            return "Inconnue"
+        try:
+            seconds = float(duration_str)
+            hours = int(seconds // 3600)
+            minutes = int((seconds % 3600) // 60)
+            secs = int(seconds % 60)
+            if hours > 0:
+                return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+            else:
+                return f"{minutes:02d}:{secs:02d}"
+        except ValueError:
+            return "Inconnue"
+    
+    def _format_file_size(self, size_bytes) -> str:
+        """Formate la taille du fichier en format lisible."""
+        if not size_bytes:
+            return "Inconnue"
+        try:
+            size = int(size_bytes)
+            for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+                if size < 1024:
+                    return f"{size:.1f} {unit}"
+                size /= 1024
+            return f"{size:.1f} PB"
+        except (ValueError, TypeError):
+            return "Inconnue"
+    
+    def _format_bitrate(self, bitrate_str: Optional[str]) -> str:
+        """Formate le bitrate en format lisible."""
+        if not bitrate_str:
+            return "Inconnu"
+        try:
+            bitrate = int(bitrate_str)
+            if bitrate >= 1000000:
+                return f"{bitrate / 1000000:.1f} Mbps"
+            elif bitrate >= 1000:
+                return f"{bitrate / 1000:.0f} kbps"
+            else:
+                return f"{bitrate} bps"
+        except ValueError:
+            return "Inconnu"
+    
+    def _format_fps(self, fps_str: Optional[str]) -> str:
+        """Formate les FPS en format lisible."""
+        if not fps_str:
+            return "Inconnu"
+        try:
+            if '/' in fps_str:
+                num, den = fps_str.split('/')
+                fps = float(num) / float(den)
+            else:
+                fps = float(fps_str)
+            return f"{fps:.2f} fps"
+        except (ValueError, ZeroDivisionError):
+            return "Inconnu"
+    
+    def _format_sample_rate(self, sample_rate: Optional[str]) -> str:
+        """Formate le sample rate en format lisible."""
+        if not sample_rate:
+            return "Inconnu"
+        try:
+            sr = int(sample_rate)
+            if sr >= 1000:
+                return f"{sr / 1000:.1f} kHz"
+            else:
+                return f"{sr} Hz"
+        except ValueError:
+            return "Inconnu"
 
     # === Backward-compatibility helpers ===
     # Many parts of the GUI still expect single-output attributes on EncodeJob.

@@ -153,19 +153,59 @@ def build_ffmpeg_stream(job: EncodeJob):
                 output_kwargs['preset'] = job.preset
         elif job.mode == "audio":
             output_kwargs['acodec'] = job.encoder
-            # Pour les codecs audio, utiliser le preset pour le bitrate s'il est défini
-            if job.preset and job.preset.endswith('k'):
-                # Le preset contient un bitrate (ex: "128k")
-                output_kwargs['ab'] = job.preset
-            elif job.quality:
-                if job.quality.isdigit():
-                    output_kwargs['ab'] = f"{job.quality}k"
+            # Contrôles de qualité spécifiques par codec audio
+            if 'flac' in job.encoder.lower():
+                # FLAC: niveau de compression 0-12 (0=rapidité, 8=défaut, 12=compression max)
+                if job.quality and job.quality.isdigit():
+                    compression_level = min(int(job.quality), 12)
+                    output_kwargs['compression_level'] = compression_level
+                elif job.preset:
+                    # Mapper les presets vers des niveaux de compression FLAC
+                    preset_to_level = {
+                        'ultrafast': '0', 'superfast': '1', 'veryfast': '2', 
+                        'faster': '3', 'fast': '4', 'medium': '8',
+                        'slow': '10', 'slower': '11', 'veryslow': '12'
+                    }
+                    level = preset_to_level.get(job.preset, '8')
+                    output_kwargs['compression_level'] = level
                 else:
-                    output_kwargs['aq'] = job.quality
+                    output_kwargs['compression_level'] = '8'  # Défaut FLAC
+            elif 'alac' in job.encoder.lower() or 'apple' in job.encoder.lower():
+                # ALAC: pas de paramètres de qualité (toujours lossless)
+                pass
+            elif 'wav' in job.encoder.lower() or 'pcm' in job.encoder.lower():
+                # WAV/PCM: pas de paramètres de qualité (toujours lossless)
+                pass
+            else:
+                # Codecs audio avec perte (AAC, MP3, Opus, etc.)
+                if job.preset and job.preset.endswith('k'):
+                    # Le preset contient un bitrate (ex: "128k")
+                    output_kwargs['ab'] = job.preset
+                elif job.quality:
+                    if job.quality.isdigit():
+                        output_kwargs['ab'] = f"{job.quality}k"
+                    else:
+                        output_kwargs['aq'] = job.quality
         else:  # image
             output_kwargs['vcodec'] = job.encoder
             if job.quality:
-                output_kwargs['q:v'] = job.quality
+                # Contrôles de qualité spécifiques par codec d'image
+                if 'webp' in job.encoder.lower():
+                    # WebP: qualité 0-100 (100 = lossless, 80-95 = très bonne qualité)
+                    quality_val = int(job.quality) if job.quality.isdigit() else 90
+                    if quality_val == 100:
+                        output_kwargs['lossless'] = '1'
+                    else:
+                        output_kwargs['q:v'] = quality_val
+                elif 'avif' in job.encoder.lower():
+                    # AVIF: qualité 0-100 
+                    output_kwargs['crf'] = job.quality
+                elif 'jpeg' in job.encoder.lower() or 'mjpeg' in job.encoder.lower():
+                    # JPEG: qualité 1-100
+                    output_kwargs['q:v'] = job.quality
+                else:
+                    # Autres codecs d'image
+                    output_kwargs['q:v'] = job.quality
     
     # Ajouter des flags personnalisés depuis le job
     if hasattr(job, 'custom_flags') and job.custom_flags:
