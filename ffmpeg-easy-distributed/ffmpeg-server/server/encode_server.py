@@ -44,8 +44,12 @@ class EncodeServer:
         self.logger.info(f"   - Encodeurs SW: {len(self.capabilities.software_encoders)}")
         self.logger.info(f"   - Encodeurs HW: {sum(len(v) for v in self.capabilities.hardware_encoders.values())}")
         
+        # Créer un wrapper pour gérer la signature
+        async def handler(websocket):
+            await self.handle_client(websocket, None)
+        
         async with websockets.serve(
-            self.handle_client, 
+            handler, 
             self.config.host, 
             self.config.port,
             ping_interval=20,
@@ -71,7 +75,7 @@ class EncodeServer:
         
         self.logger.info("✅ Serveur arrêté proprement")
     
-    async def handle_client(self, websocket, path):
+    async def handle_client(self, websocket, path=None):
         """Gère une connexion client"""
         client_id = str(uuid.uuid4())
         client_addr = websocket.remote_address
