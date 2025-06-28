@@ -156,8 +156,11 @@ class AppController:
 
     def set_global_media_type(self, media_type: str):
         """Définit le type de média global dans l'état de l'application."""
+        current_global_type = self.state.global_media_type
         self.state.set_global_media_type(media_type)
-        self.logger.info(f"Type de média global changé pour: {media_type}")
+
+        if current_global_type != media_type:
+            self.logger.info(f"Type de média global changé pour: {media_type}")
 
     def duplicate_job(self, job_id: str) -> Optional[EncodeJob]:
         """Duplique un job existant"""
