@@ -16,13 +16,17 @@ class ServerScore:
 class CapabilityMatcher:
     """Moteur de correspondance capacités serveur/job"""
     
-    def __init__(self):
+    def __init__(self, weights: Optional[Dict[str, float]] = None):
         # Poids pour calcul score final
-        self.weights = {
-            'compatibility': 0.5,  # Encodeurs supportés
-            'performance': 0.3,    # Performance brute
-            'load': 0.2           # Charge actuelle
+        default_weights = {
+            'compatibility': 0.5,
+            'performance': 0.3,
+            'load': 0.2,
         }
+        if weights and abs(sum(weights.values()) - 1.0) < 0.01:
+            self.weights = weights
+        else:
+            self.weights = default_weights
         
         # Préférences encodeurs par performance
         self.encoder_preferences = {

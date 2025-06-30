@@ -13,6 +13,7 @@ import tkinter as tk
 from typing import Optional, List
 import uuid
 import logging
+from dataclasses import asdict
 
 #j'ajoute dynamiquement le chemin racine du projet au PYTHONPATH
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -125,6 +126,18 @@ class MainWindow:
         self.run_async_func = run_async_func
         self.logger = logging.getLogger(__name__)
         self.dnd_available = dnd_available
+        # Charger les informations des codecs depuis codecs.json
+        try:
+            codecs_path = Path(__file__).parent.parent / "codecs.json"
+            with open(codecs_path, 'r', encoding='utf-8') as f:
+                codec_info = json.load(f)
+            self.ffmpeg_helpers = FFmpegHelpers(codec_info)
+            self.logger.info(f"✅ Codecs chargés depuis {codecs_path}")
+        except Exception as e:
+            self.logger.error(f"❌ Erreur lors du chargement de codecs.json: {e}")
+            # Fallback avec données vides
+            self.ffmpeg_helpers = FFmpegHelpers({})
+        self.codec_name_map = {}
         
         # Références temporaires pour compatibilité (à supprimer progressivement)
         self.jobs = self.state.jobs  # Alias temporaire
@@ -142,6 +155,7 @@ class MainWindow:
         # Variables d'interface Tkinter spécifiques à l'UI
         self.watch_var = BooleanVar(value=False)
         self.log_viewer = None
+        self._last_media_type = None  # Pour éviter les boucles infinies
         
         self.cq_var = StringVar(value="22")
         self.trim_start_var = StringVar(value="00:00:00")
@@ -162,6 +176,8 @@ class MainWindow:
         
         self.post_encode_action_var = StringVar(value="rien")
         
+        # Plus besoin de fichier JSON - logique simplifiée directement dans le code
+
         self._build_menu()
         self._build_layout()
         self._setup_drag_drop()
@@ -172,6 +188,125 @@ class MainWindow:
         # Initialiser après la construction de l'UI
         self.root.after(100, self._initial_ui_setup)
 
+    def _build_menu(self):
+        self.menu_bar = Menu(self.root)
+        self.root.config(menu=self.menu_bar)
+
+        # Menu Fichier
+        file_menu = Menu(self.menu_bar, tearoff=0)
+        file_menu.add_command(label="Ajouter des fichiers", command=self._on_menu_add_files)
+        file_menu.add_command(label="Ajouter un dossier", command=self._on_menu_add_folder)
+        file_menu.add_separator()
+        file_menu.add_command(label="Quitter", command=self.root.quit)
+        self.menu_bar.add_cascade(label="Fichier", menu=file_menu)
+
+        # Menu Édition
+        edit_menu = Menu(self.menu_bar, tearoff=0)
+        edit_menu.add_command(label="Modifier le Job", command=self._edit_selected_job)
+        edit_menu.add_command(label="Dupliquer le Job", command=self._duplicate_selected)
+        edit_menu.add_separator()
+        edit_menu.add_command(label="Supprimer le Job", command=self._remove_selected_job)
+        edit_menu.add_command(label="Vider la file", command=self._clear_queue)
+        self.menu_bar.add_cascade(label="Édition", menu=edit_menu)
+
+        # Menu Outils
+        tools_menu = Menu(self.menu_bar, tearoff=0)
+        tools_menu.add_command(label="Gestionnaire de serveurs", command=self.open_server_manager)
+        tools_menu.add_command(label="Voir les logs", command=self.open_log_viewer)
+        tools_menu.add_command(label="Paramètres", command=self.open_settings)
+        self.menu_bar.add_cascade(label="Outils", menu=tools_menu)
+
+        # Menu Aide
+        help_menu = Menu(self.menu_bar, tearoff=0)
+        help_menu.add_command(label="À propos", command=self.show_about)
+        self.menu_bar.add_cascade(label="Aide", menu=help_menu)
+
+    def _on_menu_add_files(self):
+        """Méthode appelée par le menu Ajouter des fichiers"""
+        self.logger.info("📋 Menu: Ajouter des fichiers cliqué")
+        self._add_files()
+    
+    def _on_menu_add_folder(self):
+        """Méthode appelée par le menu Ajouter un dossier"""
+        self.logger.info("📋 Menu: Ajouter un dossier cliqué")
+        self._add_folder()
+
+    def _on_add_files_button(self):
+        """Méthode appelée par le bouton Ajouter des fichiers"""
+        self.logger.info("🔘 Bouton: Ajouter des fichiers cliqué")
+        self._add_files()
+    
+    def _on_add_folder_button(self):
+        """Méthode appelée par le bouton Ajouter un dossier"""
+        self.logger.info("🔘 Bouton: Ajouter un dossier cliqué")
+        self._add_folder()
+
+    def _add_files(self):
+        self.logger.info("🔍 Ouverture du dialogue de sélection de fichiers...")
+        try:
+            files = filedialog.askopenfilenames(title="Sélectionner des fichiers")
+            self.logger.info(f"📁 Fichiers sélectionnés: {len(files) if files else 0}")
+            if files:
+                self.logger.info(f"📄 Liste des fichiers: {files}")
+                file_paths = [Path(f) for f in files]
+                self.logger.info(f"🔗 Chemins convertis: {file_paths}")
+                
+                self.logger.info("🚀 Appel du contrôleur pour ajouter les fichiers...")
+                result = self.controller.add_files_to_queue(file_paths)
+                self.logger.info(f"✅ Résultat de l'ajout: {result}")
+                
+                # Enregistrer les IDs pour le bouton "Appliquer au dernier import"
+                if result:
+                    self.last_import_job_ids = [job.job_id for job in result]
+                    self.logger.info(f"💾 IDs des derniers jobs (fichiers): {self.last_import_job_ids}")
+            else:
+                self.logger.info("❌ Aucun fichier sélectionné")
+        except Exception as e:
+            self.logger.error(f"💥 Erreur lors de l'ajout de fichiers: {e}", exc_info=True)
+
+    def _add_folder(self):
+        self.logger.info("📂 Ouverture du dialogue de sélection de dossier...")
+        try:
+            folder = filedialog.askdirectory(title="Sélectionner un dossier")
+            self.logger.info(f"📁 Dossier sélectionné: {folder}")
+            if folder:
+                folder_path = Path(folder)
+                self.logger.info(f"🔗 Chemin converti: {folder_path}")
+                
+                self.logger.info("🚀 Appel du contrôleur pour ajouter le dossier...")
+                result = self.controller.add_folder_to_queue(folder_path)
+                self.logger.info(f"✅ Résultat de l'ajout: {result}")
+                
+                # Enregistrer les IDs pour le bouton "Appliquer au dernier import"
+                if result:
+                    self.last_import_job_ids = [job.job_id for job in result]
+                    self.logger.info(f"💾 IDs des derniers jobs (dossier): {self.last_import_job_ids}")
+            else:
+                self.logger.info("❌ Aucun dossier sélectionné")
+        except Exception as e:
+            self.logger.error(f"💥 Erreur lors de l'ajout de dossier: {e}", exc_info=True)
+
+    def _clear_queue(self):
+        if messagebox.askyesno("Vider la file", "Êtes-vous sûr de vouloir supprimer tous les jobs ?"):
+            self.controller.clear_queue()
+
+    def open_server_manager(self):
+        if self.server_discovery is None:
+            messagebox.showerror("Erreur", "La découverte de serveurs n'est pas disponible.")
+            return
+        ServerManagerWindow(self.root, self.server_discovery, self.loop, self.run_async_func)
+
+    def open_log_viewer(self):
+        if self.log_viewer is None or not self.log_viewer.winfo_exists():
+            self.log_viewer = LogViewerWindow(self.root)
+        self.log_viewer.deiconify()
+
+    def open_settings(self):
+        SettingsWindow(self.root, self.state, self.controller)
+
+    def show_about(self):
+        messagebox.showinfo("À propos", "FFmpeg Easy GUI\n\nUne interface pour simplifier l'encodage.")
+
     def _on_state_changed(self, change_type: str = "general"):
         """
         Méthode centrale appelée quand l'état de l'application change.
@@ -179,10 +314,12 @@ class MainWindow:
         Cette méthode met à jour toute l'interface utilisateur pour refléter
         le nouvel état de l'application. C'est le cœur de la nouvelle architecture.
         """
+        self.logger.info(f"🔄 MAINWINDOW: _on_state_changed appelé avec type: {change_type}")
         try:
             self._update_ui_from_state(change_type)
+            self.logger.info(f"✅ MAINWINDOW: Mise à jour UI terminée pour: {change_type}")
         except Exception as e:
-            self.logger.error(f"Erreur lors de la mise à jour de l'interface: {e}", exc_info=True)
+            self.logger.error(f"💥 MAINWINDOW: Erreur lors de la mise à jour de l'interface: {e}", exc_info=True)
 
     def _update_ui_from_state(self, change_type: str):
         """Met à jour l'interface utilisateur basée sur l'état actuel"""
@@ -207,28 +344,59 @@ class MainWindow:
         # Mettre à jour la liste des presets
         self._update_presets_display()
 
+        # Si le changement concerne le type de média, mettre à jour l'interface adaptative
+        if change_type == "global_media_type_changed":
+            self._update_media_type_ui(self.state.global_media_type)
+
     def _update_jobs_display(self):
         """Met à jour l'affichage de la liste des jobs"""
+        self.logger.info(f"🔄 MAINWINDOW: _update_jobs_display appelé")
+        
         # Vérifier que l'interface est initialisée
         if not hasattr(self, 'tree') or not hasattr(self, 'job_rows'):
+            self.logger.warning(f"⚠️ MAINWINDOW: Interface pas encore initialisée (tree: {hasattr(self, 'tree')}, job_rows: {hasattr(self, 'job_rows')})")
             return
             
+        self.logger.info(f"📊 MAINWINDOW: Nombre de jobs dans l'état: {len(self.state.jobs)}")
+        
         # Synchroniser la treeview avec l'état des jobs
         current_items = set(self.tree.get_children())
         state_job_ids = {job.job_id for job in self.state.jobs}
         displayed_job_ids = {self.job_rows[item]["job"].job_id for item in current_items if item in self.job_rows}
         
+        self.logger.info(f"📋 MAINWINDOW: Items actuels dans tree: {len(current_items)}")
+        self.logger.info(f"📋 MAINWINDOW: Jobs dans l'état: {len(state_job_ids)}")
+        self.logger.info(f"📋 MAINWINDOW: Jobs affichés: {len(displayed_job_ids)}")
+        
         # Supprimer les jobs qui ne sont plus dans l'état
+        removed_count = 0
         for item in current_items:
             if item in self.job_rows:
                 job = self.job_rows[item]["job"]
                 if job.job_id not in state_job_ids:
                     self.tree.delete(item)
                     del self.job_rows[item]
+                    removed_count += 1
+        
+        if removed_count > 0:
+            self.logger.info(f"🗑️ MAINWINDOW: {removed_count} jobs supprimés de l'affichage")
         
         # Ajouter ou mettre à jour les jobs de l'état
+        added_count = 0
+        updated_count = 0
         for job in self.state.jobs:
-            self._update_or_add_job_row(job)
+            if job.job_id not in displayed_job_ids:
+                self._update_or_add_job_row(job)
+                added_count += 1
+            else:
+                self._update_or_add_job_row(job)
+                updated_count += 1
+        
+        self.logger.info(f"✅ MAINWINDOW: {added_count} jobs ajoutés, {updated_count} jobs mis à jour dans l'affichage")
+        
+        # Mettre à jour l'inspecteur et le sélecteur de jobs
+        self._update_inspector_file_list()
+        self._update_job_selector_combobox()
 
     def _update_or_add_job_row(self, job: EncodeJob):
         """Met à jour ou ajoute une ligne pour un job"""
@@ -327,20 +495,22 @@ class MainWindow:
             current_type = self.global_type_var.get()
             self.logger.info(f"✅ Interface adaptative initialisée - Type de média: {current_type}")
             
-            # Forcer une mise à jour complète pour s'assurer que tout est cohérent
-            # self._update_media_type_ui(current_type) # Handled by orchestrator
-            # self._update_codec_choices() # Handled by orchestrator
-            # self._update_encoder_choices() # Handled by orchestrator
-            # self._update_container_choices() # Handled by orchestrator
-            # self._update_quality_controls_for_global() # Old method
-
+            # Mettre à jour l'apparence des boutons selon l'état initial
+            if hasattr(self, 'media_type_buttons'):
+                self._update_media_type_buttons_appearance()
+            
             # Call the new orchestrator for initial setup based on global state
             self._update_ui_for_media_type_and_settings(
                 media_type=self.state.global_media_type,
                 output_config=None,
                 is_global_context=True
             )
-        
+            
+            # Forcer une synchronisation complète des paramètres UI vers l'AppState
+            # Cela garantit que l'AppState a les bonnes valeurs par défaut
+            self.logger.info("🔄 Synchronisation forcée des paramètres UI vers AppState...")
+            self._on_ui_setting_changed()
+            
         self.logger.info("🎯 Interface utilisateur entièrement initialisée")
 
     def _build_layout(self):
@@ -419,7 +589,8 @@ class MainWindow:
         self.context_menu.add_command(label="Resume", command=self._resume_selected_job)
         self.context_menu.add_command(label="Cancel", command=self._cancel_selected_job)
         self.context_menu.add_separator()
-        self.context_menu.add_command(label="Supprimer", command=self._remove_selected_job)
+        self.context_menu.add_command(label="Éditer", command=self._edit_selected_job)
+        self.context_menu.add_command(label="Supprimer", command=self._remove_selected_jobs)
         
         progress_frame = ttk.Frame(queue_frame)
         progress_frame.pack(fill=tk.X, pady=(5, 0))
@@ -442,6 +613,91 @@ class MainWindow:
         self.inspector_info_frame.pack(fill=tk.BOTH, expand=True)
 
         self.inspector_tree.bind("<<TreeviewSelect>>", self._on_inspector_selection_change)
+
+    def _build_file_section(self, parent):
+        """Construit la section de gestion des fichiers."""
+        file_frame = ttk.LabelFrame(parent, text="Fichiers", padding="10")
+        file_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        # Boutons pour ajouter des fichiers
+        buttons_frame = ttk.Frame(file_frame)
+        buttons_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Button(buttons_frame, text="Ajouter des fichiers", command=self._on_add_files_button).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(buttons_frame, text="Ajouter un dossier", command=self._on_add_folder_button).pack(side=tk.LEFT, padx=(0, 5))
+        
+        # Dossier d'entrée
+        input_frame = ttk.Frame(file_frame)
+        input_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Label(input_frame, text="Dossier d'entrée:").pack(side=tk.LEFT)
+        ttk.Entry(input_frame, textvariable=self.input_folder, state="readonly").pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 5))
+        ttk.Button(input_frame, text="Parcourir", command=self._browse_input_folder).pack(side=tk.LEFT)
+        
+        # Dossier de sortie
+        output_frame = ttk.Frame(file_frame)
+        output_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Label(output_frame, text="Dossier de sortie:").pack(side=tk.LEFT)
+        ttk.Entry(output_frame, textvariable=self.output_folder, state="readonly").pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 5))
+        ttk.Button(output_frame, text="Parcourir", command=self._browse_output_folder).pack(side=tk.LEFT)
+        
+        # Options de surveillance
+        watch_frame = ttk.Frame(file_frame)
+        watch_frame.pack(fill=tk.X)
+        
+        ttk.Checkbutton(watch_frame, text="Surveiller le dossier d'entrée", variable=self.watch_var).pack(side=tk.LEFT)
+
+    def _browse_input_folder(self):
+        """Ouvre un dialogue pour sélectionner le dossier d'entrée."""
+        folder = filedialog.askdirectory(title="Sélectionner le dossier d'entrée")
+        if folder:
+            self.input_folder.set(folder)
+
+    def _browse_output_folder(self):
+        """Ouvre un dialogue pour sélectionner le dossier de sortie."""
+        folder = filedialog.askdirectory(title="Sélectionner le dossier de sortie")
+        if folder:
+            self.output_folder.set(folder)
+
+    def _browse_subtitle_file(self):
+        """Ouvre un dialogue pour sélectionner un fichier de sous-titres externe."""
+        filetypes = [
+            ("Fichiers de sous-titres", "*.srt *.ass *.ssa *.sub *.vtt"),
+            ("Tous les fichiers", "*.*")
+        ]
+        filename = filedialog.askopenfilename(
+            title="Sélectionner un fichier de sous-titres",
+            filetypes=filetypes
+        )
+        if filename:
+            self.subtitle_path_var.set(filename)
+
+    def _browse_lut_file(self):
+        """Ouvre un dialogue pour sélectionner un fichier LUT."""
+        filetypes = [
+            ("Fichiers LUT", "*.cube *.look *.3dl"),
+            ("Tous les fichiers", "*.*")
+        ]
+        filename = filedialog.askopenfilename(
+            title="Sélectionner un fichier LUT",
+            filetypes=filetypes
+        )
+        if filename:
+            self.lut_path_var.set(filename)
+
+    def _browse_watermark_file(self):
+        """Ouvre un dialogue pour sélectionner un fichier de filigrane PNG."""
+        filetypes = [
+            ("Images PNG", "*.png"),
+            ("Tous les fichiers", "*.*")
+        ]
+        filename = filedialog.askopenfilename(
+            title="Sélectionner un fichier PNG pour le filigrane",
+            filetypes=filetypes
+        )
+        if filename:
+            self.watermark_path_var.set(filename)
 
     def _build_encoding_section(self, parent):
         # Variables d'interface liées au state
@@ -478,9 +734,26 @@ class MainWindow:
         self.bitrate_var.trace_add("write", self._on_ui_setting_changed)
         self.multipass_var.trace_add("write", self._on_ui_setting_changed)
 
+        #this part do that
+        # --- Barre d'application des paramètres (placée tout en haut de la zone d'encodage) ---
+        file_apply_frame = ttk.Frame(parent, padding="5")
+        file_apply_frame.pack(fill=tk.X, pady=(5, 5))
+
+        ttk.Label(file_apply_frame, text="Fichier à configurer:").pack(side=tk.LEFT, padx=(0, 5))
+        self.job_selector_combobox = ttk.Combobox(file_apply_frame, textvariable=self.selected_job_for_settings_var, state="readonly", width=40)
+        self.job_selector_combobox.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0,10))
+        self.job_selector_combobox.bind("<<ComboboxSelected>>", self._on_job_selected_for_settings_change)
+
+        self.apply_settings_btn = ttk.Button(file_apply_frame, text="Appliquer", command=self._apply_ui_settings_to_selected_job_via_combobox)
+        self.apply_settings_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+        self.apply_to_last_batch_btn = ttk.Button(file_apply_frame, text="Appliquer au dernier import", command=self._apply_ui_settings_to_last_import_batch)
+        self.apply_to_last_batch_btn.pack(side=tk.LEFT)
+
+        # --- Zone scrollable contenant tous les contrôles ---
         canvas_frame = ttk.Frame(parent)
         canvas_frame.pack(fill=tk.BOTH, expand=True)
-        
+
         self.settings_canvas = tk.Canvas(canvas_frame, highlightthickness=0)
         scrollbar = ttk.Scrollbar(canvas_frame, orient="vertical", command=self.settings_canvas.yview)
         main_frame = ttk.Frame(self.settings_canvas)
@@ -526,20 +799,6 @@ class MainWindow:
         
         main_frame.after(100, lambda: bind_recursive(main_frame))
         
-        file_apply_frame = ttk.Frame(main_frame, padding="5")
-        file_apply_frame.pack(fill=tk.X, pady=(5, 5))
-
-        ttk.Label(file_apply_frame, text="Fichier à configurer:").pack(side=tk.LEFT, padx=(0, 5))
-        self.job_selector_combobox = ttk.Combobox(file_apply_frame, textvariable=self.selected_job_for_settings_var, state="readonly", width=40)
-        self.job_selector_combobox.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0,10))
-        self.job_selector_combobox.bind("<<ComboboxSelected>>", self._on_job_selected_for_settings_change)
-
-        self.apply_settings_btn = ttk.Button(file_apply_frame, text="Appliquer", command=self._apply_ui_settings_to_selected_job_via_combobox)
-        self.apply_settings_btn.pack(side=tk.LEFT, padx=(0, 5))
-
-        self.apply_to_last_batch_btn = ttk.Button(file_apply_frame, text="Appliquer au dernier import", command=self._apply_ui_settings_to_last_import_batch)
-        self.apply_to_last_batch_btn.pack(side=tk.LEFT)
-
         preset_frame = ttk.LabelFrame(main_frame, text="Préréglage", padding="5")
         preset_frame.pack(fill=tk.X, pady=(0, 5))
         self.preset_combo = ttk.Combobox(preset_frame, textvariable=self.preset_name_var, state="readonly")
@@ -548,9 +807,31 @@ class MainWindow:
 
         media_type_frame = ttk.LabelFrame(main_frame, text="Type de Média", padding="5")
         media_type_frame.pack(fill=tk.X, pady=(0, 5))
-        self.media_type_combo = ttk.Combobox(media_type_frame, textvariable=self.global_type_var, values=["video", "audio", "image"], state="readonly")
-        self.media_type_combo.pack(fill=tk.X, expand=True)
-        self.media_type_combo.bind("<<ComboboxSelected>>", self._on_media_type_change)
+        
+        # Boutons de sélection avec indication visuelle
+        button_frame = ttk.Frame(media_type_frame)
+        button_frame.pack(fill=tk.X, pady=(5, 0))
+        
+        # Stocker les références des boutons pour pouvoir changer leurs couleurs
+        self.media_type_buttons = {}
+        
+        self.media_type_buttons["video"] = tk.Button(button_frame, text="VIDEO", 
+                                                     command=lambda: self._select_media_type("video"),
+                                                     relief=tk.RAISED, bd=2, padx=15, pady=5)
+        self.media_type_buttons["video"].pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.media_type_buttons["audio"] = tk.Button(button_frame, text="AUDIO", 
+                                                     command=lambda: self._select_media_type("audio"),
+                                                     relief=tk.RAISED, bd=2, padx=15, pady=5)
+        self.media_type_buttons["audio"].pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.media_type_buttons["image"] = tk.Button(button_frame, text="IMAGE", 
+                                                     command=lambda: self._select_media_type("image"),
+                                                     relief=tk.RAISED, bd=2, padx=15, pady=5)
+        self.media_type_buttons["image"].pack(side=tk.LEFT)
+        
+        # Initialiser l'apparence des boutons
+        self._update_media_type_buttons_appearance()
 
         self.transform_frame = ttk.LabelFrame(main_frame, text="Taille et Rognage", padding="5")
         self.transform_frame.pack(fill=tk.X, pady=(0, 5))
@@ -579,17 +860,20 @@ class MainWindow:
         ttk.Label(self.transform_frame, text="Droite:").grid(row=3, column=2, sticky="e", padx=5)
         ttk.Entry(self.transform_frame, textvariable=self.crop_right_var, width=5).grid(row=3, column=3)
         
-        format_frame = ttk.LabelFrame(main_frame, text="Format et Codec", padding="5")
-        format_frame.pack(fill=tk.X, pady=(0, 5))
-        ttk.Label(format_frame, text="Conteneur:").grid(row=0, column=0, sticky="w", pady=2)
-        self.container_combo = ttk.Combobox(format_frame, textvariable=self.container_var, state="readonly")
+        # Enregistrer comme attribut pour pouvoir l'afficher/masquer dynamiquement
+        self.format_frame = ttk.LabelFrame(main_frame, text="Format et Codec", padding="5")
+        self.format_frame.pack(fill=tk.X, pady=(0, 5))
+        ttk.Label(self.format_frame, text="Conteneur:").grid(row=0, column=0, sticky="w", pady=2)
+        self.container_combo = ttk.Combobox(self.format_frame, textvariable=self.container_var, state="readonly")
         self.container_combo.grid(row=0, column=1, sticky="ew", pady=2)
-        ttk.Label(format_frame, text="Codec Vidéo:").grid(row=1, column=0, sticky="w", pady=2)
-        self.global_codec_combo = ttk.Combobox(format_frame, textvariable=self.global_codec_var, state="readonly")
+        self.container_combo.bind("<<ComboboxSelected>>", self._on_container_change)
+        
+        ttk.Label(self.format_frame, text="Codec Vidéo:").grid(row=1, column=0, sticky="w", pady=2)
+        self.global_codec_combo = ttk.Combobox(self.format_frame, textvariable=self.global_codec_var, state="readonly")
         self.global_codec_combo.grid(row=1, column=1, sticky="ew", pady=2)
         self.global_codec_combo.bind("<<ComboboxSelected>>", self._on_codec_change)
-        ttk.Label(format_frame, text="Encodeur:").grid(row=2, column=0, sticky="w", pady=2)
-        self.global_encoder_combo = ttk.Combobox(format_frame, textvariable=self.global_encoder_var, state="readonly", width=40)
+        ttk.Label(self.format_frame, text="Encodeur:").grid(row=2, column=0, sticky="w", pady=2)
+        self.global_encoder_combo = ttk.Combobox(self.format_frame, textvariable=self.global_encoder_var, state="readonly", width=40)
         self.global_encoder_combo.grid(row=2, column=1, sticky="ew", pady=2)
         self.global_encoder_combo.bind("<<ComboboxSelected>>", self._on_encoder_change)
         
@@ -695,19 +979,19 @@ class MainWindow:
         
         self.transform_frame.columnconfigure(1, weight=1)
         self.transform_frame.columnconfigure(3, weight=1)
-        format_frame.columnconfigure(1, weight=1)
+        self.format_frame.columnconfigure(1, weight=1)
         self.quality_frame.columnconfigure(2, weight=1)
         self.subtitle_frame.columnconfigure(2, weight=1)
         
         # Le label du codec sera mis à jour dynamiquement
-        self.codec_label = ttk.Label(format_frame, text="Codec:")
+        self.codec_label = ttk.Label(self.format_frame, text="Codec:")
         self.codec_label.grid(row=1, column=0, sticky="w", pady=2)
-        self.global_codec_combo = ttk.Combobox(format_frame, textvariable=self.global_codec_var, state="readonly")
+        self.global_codec_combo = ttk.Combobox(self.format_frame, textvariable=self.global_codec_var, state="readonly")
         self.global_codec_combo.grid(row=1, column=1, sticky="ew", pady=2)
         self.global_codec_combo.bind("<<ComboboxSelected>>", self._on_codec_change)
         
-        ttk.Label(format_frame, text="Encodeur:").grid(row=2, column=0, sticky="w", pady=2)
-        self.global_encoder_combo = ttk.Combobox(format_frame, textvariable=self.global_encoder_var, state="readonly", width=40)
+        ttk.Label(self.format_frame, text="Encodeur:").grid(row=2, column=0, sticky="w", pady=2)
+        self.global_encoder_combo = ttk.Combobox(self.format_frame, textvariable=self.global_encoder_var, state="readonly", width=40)
         self.global_encoder_combo.grid(row=2, column=1, sticky="ew", pady=2)
         self.global_encoder_combo.bind("<<ComboboxSelected>>", self._on_encoder_change)
 
@@ -730,1478 +1014,158 @@ class MainWindow:
         
         self.root.after(100, self._update_scroll_state)
         
-    def _on_media_type_change(self, event=None):
-        """Called when the user changes the global media type dropdown."""
-        selected_global_media_type = event.widget.get()
-        self.logger.info(f"Global media type dropdown changed by user to: {selected_global_media_type}")
-
-        # Update AppState. This will also reset related global settings in AppState (codec, encoder, etc.)
-        # and notify observers. The logging part is handled by the controller now.
-        self.controller.set_global_media_type(selected_global_media_type)
-
-        # After controller updates AppState, AppState.global_media_type is selected_global_media_type.
-        # AppState.global_codec, global_encoder, global_container are now blank.
-        # The _update_ui_for_media_type_and_settings call will handle syncing UI vars from these
-        # new blank AppState values and then populating choices correctly.
-        self._update_ui_for_media_type_and_settings(selected_global_media_type, output_config=None, is_global_context=True)
-    
-    def _on_codec_change(self, event=None):
-        """Called when the codec selection changes."""
-        media_type = self.global_type_var.get()
-        new_codec = self.global_codec_var.get()
-        self.logger.debug(f"Codec changed to: {new_codec} for media type: {media_type}")
-
-        self._update_encoder_choices(for_media_type=media_type, codec=new_codec)
-        # Encoder change will trigger its own _on_encoder_change, which handles further updates.
-        # However, if encoder doesn't change but codec did, we might need to force update quality controls.
-        # Let's ensure _on_encoder_change is robust or call downstream updates here too.
-
-        # For now, let _on_encoder_change handle the rest if it's triggered.
-        # If global_encoder_var didn't change value, _on_encoder_change might not fire.
-        # So, we explicitly update downstream elements that depend on codec or encoder.
-        current_encoder = self.global_encoder_var.get() # This would be the newly set encoder if it changed
-        self._update_container_choices(for_media_type=media_type)
-        self._update_quality_preset_controls(encoder=current_encoder)
-        self._update_quality_controls_ui(media_type=media_type, encoder=current_encoder, codec=new_codec,
-                                         output_config=self._get_current_job_output_config_for_ui()) # Pass current job's config
-
-        # Update AppState if this is a global context change
-        if not self.selected_job_for_settings_var.get(): # If no specific job is selected
-            self.state.update_global_encoding_settings(codec=new_codec, encoder=current_encoder)
-
-
-    def _on_encoder_change(self, event=None):
-        """Called when the encoder selection changes."""
-        media_type = self.global_type_var.get()
-        codec = self.global_codec_var.get() # Current codec
-        new_encoder = self.global_encoder_var.get()
-        self.logger.debug(f"Encoder changed to: {new_encoder} for media type: {media_type}, codec: {codec}")
-
-        self._update_quality_preset_controls(encoder=new_encoder)
-        self._update_quality_controls_ui(media_type=media_type, encoder=new_encoder, codec=codec,
-                                         output_config=self._get_current_job_output_config_for_ui())
-
-        # Update AppState if this is a global context change
-        if not self.selected_job_for_settings_var.get(): # If no specific job is selected
-             self.state.update_global_encoding_settings(encoder=new_encoder)
 
 
 
-    def _get_current_job_output_config_for_ui(self) -> Optional[OutputConfig]:
-        """Helper to get the OutputConfig for the currently selected job in the settings UI, or None."""
-        selected_job_name = self.selected_job_for_settings_var.get()
-        if not selected_job_name:
-            return None
-        # Ensure self.state.jobs is the correct list of jobs
-        target_job = next((j for j in self.state.jobs if j.src_path.name == selected_job_name), None)
-        if target_job and target_job.outputs:
-            return target_job.outputs[0]
-        self.logger.debug(f"No output config found for UI for job: {selected_job_name}")
-        return None
-    
-    def _on_tonemap_change(self):
-        if self.tonemap_var.get():
-            self.tonemap_method_combo.config(state="readonly")
-            self.preserve_hdr_var.set(False)
-        else:
-            self.tonemap_method_combo.config(state="disabled")
-    
-    def _on_frame_configure(self, event):
-        self.settings_canvas.configure(scrollregion=self.settings_canvas.bbox("all"))
-        self._update_scroll_state()
-    
-    def _on_canvas_configure(self, event):
-        canvas_width = event.width
-        self.settings_canvas.itemconfig(self._canvas_window, width=canvas_width)
-        self._update_scroll_state()
-    
-    def _update_scroll_state(self):
-        bbox = self.settings_canvas.bbox("all")
-        if bbox:
-            content_height = bbox[3] - bbox[1]
-            canvas_height = self.settings_canvas.winfo_height()
-            
-            if content_height > canvas_height:
-                self._scrollbar.pack(side="right", fill="y")
-            else:
-                self._scrollbar.pack_forget()
-    
-    def _update_resolution_choices(self):
-        resolution_choices = [
-            "Keep Original", "3840x2160 (4K)", "2560x1440 (1440p)", "1920x1080 (1080p)", "1280x720 (720p)",
-            "854x480 (480p)", "640x360 (360p)", "1080x1920 (1080p Portrait)", "720x1280 (720p Portrait)",
-            "480x854 (480p Portrait)", "540x960 (TikTok/Stories)", "1125x2000 (Instagram Stories)",
-            "3440x1440 (Ultrawide 1440p)", "2560x1080 (Ultrawide 1080p)", "1920x1200 (WUXGA)",
-            "1680x1050 (WSXGA+)", "1440x900 (WXGA+)", "1280x800 (WXGA)", "Custom"
-        ]
-        self.resolution_combo['values'] = resolution_choices
-        if not self.resolution_var_settings.get():
-            self.resolution_var_settings.set("Keep Original")
 
-    def _apply_settings_to_selected_file(self):
-        selected_filename = self.selected_file_var.get()
-        if selected_filename == "No file selected" or not selected_filename:
-            messagebox.showwarning("No File Selected", "Please select a file to apply settings to.")
-            return
+    def _select_media_type(self, media_type):
+        """Sélectionne un type de média via les boutons"""
+        self.logger.info(f"🎯 SÉLECTION BOUTON: {media_type}")
+        self.global_type_var.set(media_type)
+        self.state.set_global_media_type(media_type)
         
-        target_job = None
-        for job_id, job_data in self.job_rows.items():
-            job = job_data["job"]
-            if job.src_path.name == selected_filename:
-                target_job = job
-                break
+        # Mettre à jour l'apparence des boutons
+        self._update_media_type_buttons_appearance()
         
-        if not target_job:
-            messagebox.showerror("Job Not Found", "Could not find the job for the selected file.")
-            return
+        # Déclencher l'adaptation de l'interface
+        self._adapt_ui_simple(media_type)
         
-        self._apply_ui_settings_to_job(target_job)
-        self._update_job_row(target_job)
-        messagebox.showinfo("Settings Applied", f"Settings have been applied to '{selected_filename}'")
-
-    def _apply_settings_to_all_files(self):
-        if not self.jobs:
-            messagebox.showwarning("No Files", "No files in the queue to apply settings to.")
-            return
-        
-        result = messagebox.askyesno("Apply to All", f"Apply current settings to all {len(self.jobs)} files in the queue?", icon='question')
-        if not result:
-            return
-        
-        for job in self.jobs:
-            self._apply_ui_settings_to_job(job)
-            self._update_job_row(job)
-        
-        messagebox.showinfo("Settings Applied", f"Settings have been applied to all {len(self.jobs)} files")
-
-    def _reset_settings_ui(self):
-        result = messagebox.askyesno("Reset Settings", "Reset all encoding settings to default values?", icon='question')
-        if not result:
-            return
-        
-        self.global_type_var.set("video")
-        self.global_codec_var.set("")
-        self.global_encoder_var.set("")
-        self.container_var.set("")
-        self.quality_var.set("")
-        self.preset_var.set("")
-        self.cq_var.set("")
-        self.custom_flags_var.set("")
-        self.video_mode_var.set("cq")
-        self.bitrate_var.set("")
-        self.multipass_var.set(False)
-        self.resolution_var_settings.set("")
-        self.subtitle_mode_var.set("copy")
-        self.subtitle_path_var.set("")
-        self.trim_start_var.set("")
-        self.trim_end_var.set("")
-        
-        # self._update_codec_choices() # Orchestrator will handle this and more
-
-        # After resetting vars, call the orchestrator to update the UI to reflect these defaults
-        # for the "video" media type (which is the default reset type).
+        # Puis mettre à jour les paramètres
         self._update_ui_for_media_type_and_settings(
-            media_type="video", # Resetting to video defaults
+            media_type=media_type,
             output_config=None,
             is_global_context=True
         )
-        messagebox.showinfo("Settings Reset", "All encoding settings have been reset to default values")
 
-    def _build_menu(self):
-        self.menubar = Menu(self.root)
-        file_menu = Menu(self.menubar, tearoff=0)
-        file_menu.add_command(label="Add Files…", command=self._add_files)
-        file_menu.add_command(label="Add Folder…", command=self._add_folder)
-        file_menu.add_separator()
-        file_menu.add_command(label="Add Files or Folder…", command=self._add_files_or_folder)
-        file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.root.quit)
-        self.menubar.add_cascade(label="File", menu=file_menu)
+    def _update_media_type_buttons_appearance(self):
+        """Met à jour l'apparence des boutons selon la sélection actuelle"""
+        current_type = self.global_type_var.get()
         
-        edit_menu = Menu(self.menubar, tearoff=0)
-        edit_menu.add_command(label="Batch Operations", command=self._batch_operations)
-        edit_menu.add_command(label="Advanced Filters", command=self._advanced_filters)
-        edit_menu.add_command(label="Audio Tracks", command=self._configure_audio_tracks)
-        edit_menu.add_command(label="Subtitles...", command=self._manage_subtitles)
-        edit_menu.add_separator()
-        edit_menu.add_command(label="Clear Queue", command=self._clear_queue)
-        edit_menu.add_command(label="Réassigner Jobs...", command=self._reassign_selected_jobs)
-        edit_menu.add_separator()
-        edit_menu.add_command(label="Merge Videos", command=self._merge_videos)
-        self.menubar.add_cascade(label="Edit", menu=edit_menu)
-
-        preset_menu = Menu(self.menubar, tearoff=0)
-        preset_menu.add_command(label="Save Current as Preset…", command=self._save_preset)
-        preset_menu.add_separator()
-        for preset_name in self.state.get_preset_names():
-            preset_menu.add_command(label=preset_name, command=lambda name=preset_name: self._load_preset_by_name(name))
-        self.menubar.add_cascade(label="Presets", menu=preset_menu)
-        
-        view_menu = Menu(self.menubar, tearoff=0)
-        view_menu.add_command(label="Show Log Viewer", command=self._show_log_viewer)
-        self.menubar.add_cascade(label="View", menu=view_menu)
-
-        servers_menu = Menu(self.menubar, tearoff=0)
-        self.menubar.add_cascade(label="Serveurs", menu=servers_menu)
-        
-        servers_menu.add_command(label="Gestion Serveurs", command=self.open_server_manager)
-        servers_menu.add_command(label="File d'Attente Distribuée", command=self.open_job_queue_window)
-        servers_menu.add_command(label="Capacités Serveurs", command=self.open_capability_viewer_window)
-        servers_menu.add_separator()
-        servers_menu.add_command(label="Test Connexions", command=lambda: self.run_async_func(self.test_all_servers(), self.loop))
-
-        settings_menu = Menu(self.menubar, tearoff=0)
-        settings_menu.add_command(label="Preferences…", command=self._open_settings)
-        self.menubar.add_cascade(label="Settings", menu=settings_menu)
-        self.root.config(menu=self.menubar)
-
-    def _create_status_bar(self):
-        self.status_frame = ttk.Frame(self.root)
-        self.status_frame.pack(side=tk.BOTTOM, fill=tk.X)
-        
-        self.status_var = StringVar(value="Prêt")
-        self.status_label = ttk.Label(self.status_frame, textvariable=self.status_var)
-        self.status_label.pack(side=tk.LEFT, padx=5)
-        
-        # Indicateur de statut drag & drop
-        dnd_status = "🟢 Drag & Drop activé" if self.dnd_available else "🟡 Drag & Drop désactivé"
-        self.dnd_var = StringVar(value=dnd_status)
-        self.dnd_label = ttk.Label(self.status_frame, textvariable=self.dnd_var, font=("Helvetica", 9))
-        self.dnd_label.pack(side=tk.LEFT, padx=(20, 5))
-        
-        self.servers_var = StringVar(value="🔴 Aucun serveur")
-        self.servers_label = ttk.Label(self.status_frame, textvariable=self.servers_var)
-        self.servers_label.pack(side=tk.RIGHT, padx=5)
-
-    def update_server_status(self, connected_servers: List[ServerInfo]):
-        """Met à jour le statut des serveurs dans la barre d'état."""
-        # Vérifier que l'interface est initialisée
-        if not hasattr(self, 'servers_var') or not self.server_discovery or not self.job_scheduler:
-            return
-            
-        try:
-            all_known_servers = list(self.server_discovery.get_all_servers().values())
-            local_server_info = self.job_scheduler.get_local_server_info()
-
-            # Le serveur local est toujours implicitement présent, on s'intéresse aux serveurs distants configurés.
-            # get_all_servers() peut contenir le serveur local si on l'ajoute manuellement, donc on le filtre.
-            remote_servers = [s for s in all_known_servers if s.server_id != local_server_info.server_id]
-            
-            # Les serveurs connectés sont ceux qui sont activement en ligne.
-            connected_remote_servers = [s for s in connected_servers if s.server_id != local_server_info.server_id]
-            
-            # Les jobs totaux incluent le local et les distants connectés
-            all_available_servers = connected_remote_servers + [local_server_info]
-            total_jobs = sum(s.current_jobs for s in all_available_servers)
-
-            if not remote_servers:
-                # // S'il n'y a aucun serveur distant configuré, on est en mode local.
-                self.servers_var.set("🟡 Serveur local uniquement")
-            else:
-                # // S'il y a des serveurs distants configurés.
-                connected_count = len(connected_remote_servers)
-                if connected_count > 0:
-                    # // Au moins un serveur distant est connecté.
-                    self.servers_var.set(f"🟢 {connected_count} serveur(s) distant(s) connecté(s) - {total_jobs} jobs")
-                else:
-                    # // Des serveurs distants sont configurés mais aucun n'est connecté.
-                    self.servers_var.set(f"🔴 Serveurs distants déconnectés - {total_jobs} jobs (local)")
-        except Exception as e:
-            self.logger.warning(f"Erreur lors de la mise à jour du statut serveur: {e}")
-
-        self._update_server_map_and_status(connected_servers)
-
-    def _update_server_map_and_status(self, connected_servers: List[ServerInfo]):
-        """Met à jour le dictionnaire des serveurs et la barre de statut."""
-        # Vérifier que les composants nécessaires sont initialisés
-        if not self.server_discovery or not self.job_scheduler:
-            return
-            
-        try:
-            self.server_map.clear()
-            local_server = self.job_scheduler.get_local_server_info()
-            if local_server:
-                self.server_map[local_server.server_id] = local_server.name
-            
-            all_servers = self.server_discovery.get_all_servers()
-            for server_id, server_info in all_servers.items():
-                self.server_map[server_id] = server_info.name
-                
-            # Éviter la récursion - ne pas rappeler update_server_status ici
-            # car cette méthode est déjà appelée depuis update_server_status
-            
-            # Mettre à jour les jobs existants pour refléter les noms de serveur
-            if hasattr(self, 'tree') and hasattr(self, 'job_rows'):
-                for job_id in self.tree.get_children():
-                    if job_id in self.job_rows:
-                        self._update_job_row(self.job_rows[job_id]["job"])
-        except Exception as e:
-            self.logger.warning(f"Erreur lors de la mise à jour server map: {e}")
-
-    def open_server_manager(self):
-        ServerManagerWindow(self.root, self.server_discovery, self.loop, self.run_async_func)
-
-    def open_job_queue_window(self):
-        JobQueueWindow(self.root, self.job_scheduler, self.server_discovery)
-
-    def open_capability_viewer_window(self):
-        CapabilityViewerWindow(self.root, self.server_discovery, self.job_scheduler.capability_matcher)
-
-    async def test_all_servers(self):
-        self.status_var.set("Test des connexions serveurs...")
-        servers = self.server_discovery.get_all_servers().values()
-        for server_info in servers:
-            is_reachable = await self.distributed_client.ping_server(server_info.server_id)
-            if is_reachable:
-                logging.info(f"Serveur {server_info.name} ({server_info.ip}:{server_info.port}) est joignable.")
-            else:
-                logging.warning(f"Serveur {server_info.name} ({server_info.ip}:{server_info.port}) n'est PAS joignable.")
-        self.status_var.set("Test des connexions terminé.")
-
-    def _build_file_section(self, parent_frame):
-        self.input_folder = StringVar(value="No input folder selected")
-        self.output_folder = StringVar(value="No output folder selected")
-
-        folder_grid = ttk.Frame(parent_frame)
-        folder_grid.pack(fill="x")
-
-        ttk.Label(folder_grid, text="Input:", font=("Helvetica", 11, "bold")).grid(row=0, column=0, sticky="w", padx=(0, 10))
-        self.input_folder_entry = ttk.Entry(folder_grid, textvariable=self.input_folder, width=60, font=("Helvetica", 10))
-        self.input_folder_entry.grid(row=0, column=1, sticky="ew", padx=(0, 10))
-        ttk.Button(folder_grid, text="Browse", command=self._select_input_folder, width=8).grid(row=0, column=2)
-
-        ttk.Label(folder_grid, text="Output:", font=("Helvetica", 11, "bold")).grid(row=1, column=0, sticky="w", padx=(0, 10), pady=(8, 0))
-        self.output_folder_entry = ttk.Entry(folder_grid, textvariable=self.output_folder, width=60, font=("Helvetica", 10))
-        self.output_folder_entry.grid(row=1, column=1, sticky="ew", padx=(0, 10), pady=(8, 0))
-        
-        self.output_folder.trace_add("write", lambda *args: self._update_control_buttons_state('idle'))
-        ttk.Button(folder_grid, text="Browse", command=self._select_output_folder, width=8).grid(row=1, column=2, pady=(8, 0))
-        
-        info_text = "Optional: If no output folder is selected, files will be saved in the same folder as source with encoder suffix (e.g., filename_x265.mp4)"
-        if not self.dnd_available:
-            info_text += "\n⚠️ Note: Drag & Drop is disabled on this system. Use the buttons above to add files."
-        
-        info_label = ttk.Label(folder_grid, text=info_text, 
-                              font=("Helvetica", 9), foreground="gray")
-        info_label.grid(row=2, column=0, columnspan=3, sticky="w", pady=(5, 0))
-
-        folder_grid.columnconfigure(1, weight=1)
-
-        buttons_row = ttk.Frame(parent_frame)
-        buttons_row.pack(fill="x", pady=(15, 0))
-        
-        ttk.Button(buttons_row, text="Add Files", command=self._add_files).pack(side="left", padx=(0, 10))
-        ttk.Button(buttons_row, text="Add Folder", command=self._add_folder).pack(side="left", padx=(0, 10))
-        ttk.Button(buttons_row, text="Add from URL", command=self._add_from_url).pack(side="left", padx=(0, 10))
-
-        watch_frame = ttk.LabelFrame(parent_frame, text="Surveillance de dossier", padding="5")
-        watch_frame.pack(fill=tk.X, pady=(15, 0))
-        watch_toggle = ttk.Checkbutton(watch_frame, text="Surveiller le dossier d'entrée", variable=self.watch_var, command=self._toggle_watch)
-        watch_toggle.pack(side=tk.TOP, fill=tk.X)
-        
-        preset_frame = ttk.Frame(watch_frame)
-        preset_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(preset_frame, text="Préréglage pour les nouveaux fichiers:").pack(side=tk.LEFT)
-        self.watch_preset_combo = ttk.Combobox(preset_frame, state="readonly")
-        self.watch_preset_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        preset_names = self.state.get_preset_names()
-        if preset_names:
-            self.watch_preset_combo['values'] = preset_names
-            self.watch_preset_combo.set(preset_names[0])
-        
-        self.watch_status = ttk.Label(watch_frame, text="Statut: Inactif")
-        self.watch_status.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
-
-    def _add_files(self):
-        """Ajoute des fichiers via une boîte de dialogue"""
-        paths = filedialog.askopenfilenames(title="Select input files")
-        if not paths:
-            return
-        
-        file_paths = [Path(p) for p in paths]
-        added_jobs = self.controller.add_files_to_queue(file_paths)
-        
-        if added_jobs:
-            self.logger.info(f"✅ {len(added_jobs)} fichiers ajoutés")
-        else:
-            self.logger.warning("⚠️ Aucun fichier valide sélectionné")
-
-    def _add_folder(self):
-        """Ajoute tous les fichiers d'un dossier"""
-        folder_path = filedialog.askdirectory(title="Select a Folder")
-        if folder_path:
-            self.input_folder.set(folder_path)
-            folder_path_obj = Path(folder_path)
-            added_jobs = self.controller.add_folder_to_queue(folder_path_obj, recursive=True)
-            
-            if added_jobs:
-                self.logger.info(f"✅ {len(added_jobs)} fichiers ajoutés depuis {folder_path}")
-            else:
-                self.logger.warning(f"⚠️ Aucun fichier média trouvé dans {folder_path}")
-
-    def _merge_videos(self):
-        MergeVideosWindow(self.root, self)
-
-    def _add_files_or_folder(self):
-        choice = messagebox.askyesnocancel("Add Files or Folder", "Yes = Files, No = Folder")
-        if choice is True:
-            self._add_files()
-        elif choice is False:
-            self._add_folder()
-
-    def _add_from_url(self):
-        url = simpledialog.askstring("Add from URL", "Enter a video URL:")
-        if not url:
-            return
-        threading.Thread(target=self._download_and_enqueue, args=(url,), daemon=True).start()
-
-    def _download_and_enqueue(self, url):
-        try:
-            import tempfile
-            temp_dir = tempfile.mkdtemp()
-            command = ["yt-dlp", "-o", os.path.join(temp_dir, "%(title)s.%(ext)s"), url]
-            subprocess.run(command, check=True)
-            downloaded_files = list(Path(temp_dir).rglob("*.*"))
-            if downloaded_files:
-                self.root.after_idle(self._enqueue_paths, downloaded_files)
-            else:
-                messagebox.showerror("Download Error", "Could not find the downloaded file.")
-        except Exception as e:
-            messagebox.showerror("Download Error", f"Could not download video: {e}")
-
-    def _enqueue_paths(self, paths: list[Path]):
-        """Méthode héritée qui utilise maintenant le contrôleur"""
-        # Utiliser le contrôleur pour ajouter les fichiers
-        added_jobs = self.controller.add_files_to_queue(paths)
-        
-        if added_jobs:
-            self.logger.info(f"✅ {len(added_jobs)} fichiers ajoutés")
-            # Les IDs des nouveaux jobs pour l'import batch
-            self.last_import_job_ids = [job.job_id for job in added_jobs]
-        else:
-            self.logger.warning("⚠️ Aucun fichier valide trouvé")
-            self.last_import_job_ids = []
-
-    def _enqueue_paths_legacy(self, paths: list[Path]):
-        """Ancienne méthode conservée temporairement pour référence"""
-        out_root = Path(self.output_folder.get()) if self.output_folder.get() and not self.output_folder.get().startswith("(no") else None
-        keep_structure = self.state.settings.ui.keep_folder_structure
-        input_folder = self.input_folder.get()
-        
-        current_batch_job_ids = []
-
-        for p in paths:
-            mode = self._detect_mode(p)
-            if self.global_type_var.get() == "unknown":
-                self.global_type_var.set(mode)
-            
-            if out_root and keep_structure and input_folder and not input_folder.startswith("(no"):
-                try:
-                    input_path = Path(input_folder)
-                    relative = p.relative_to(input_path)
-                except (ValueError, OSError):
-                    relative = p.name
-            else:
-                relative = p.name
-            
-            container = self._get_container_from_display(self.container_var.get())
-            
-            if not container:
-                if mode == "video": container = "mp4"
-                elif mode == "audio": container = "m4a"
-                elif mode == "image": container = "png"
-                else: container = "mp4"
-            
-            initial_dst_path = None
-            if out_root:
-                dst_basename = relative if isinstance(relative, Path) else Path(relative)
-                initial_dst_path = out_root / dst_basename
-                initial_dst_path = initial_dst_path.with_suffix("." + container)
-                initial_dst_path.parent.mkdir(parents=True, exist_ok=True)
-            else:
-                encoder_display = self.global_encoder_var.get()
-                encoder_name = self._get_encoder_name_from_display(encoder_display) if encoder_display else ""
-                
-                if "x265" in encoder_name or "hevc" in encoder_name: suffix = "_x265"
-                elif "x264" in encoder_name or "h264" in encoder_name: suffix = "_x264"
-                elif "av1" in encoder_name: suffix = "_av1"
-                elif "vp9" in encoder_name: suffix = "_vp9"
-                elif "nvenc" in encoder_name: suffix = "_nvenc"
-                elif "qsv" in encoder_name: suffix = "_qsv" 
-                elif "amf" in encoder_name: suffix = "_amf"
-                elif "videotoolbox" in encoder_name: suffix = "_vt"
-                elif mode == "audio":
-                    if "aac" in encoder_name: suffix = "_aac"
-                    elif "mp3" in encoder_name: suffix = "_mp3"
-                    elif "opus" in encoder_name: suffix = "_opus"
-                    elif "flac" in encoder_name: suffix = "_flac"
-                    else: suffix = "_audio"
-                elif mode == "image":
-                    if "webp" in encoder_name: suffix = "_webp"
-                    elif "avif" in encoder_name: suffix = "_avif"
-                    else: suffix = "_img"
-                else: suffix = "_encoded"
-                
-                stem = p.stem
-                initial_dst_path = p.parent / f"{stem}{suffix}.{container}"
-
-            output_cfg = OutputConfig(name="Default", initial_dst_path=initial_dst_path, mode=mode)
-            
-            # Appliquer les paramètres actuels de l'UI
-            encoder_display = self.global_encoder_var.get()
-            encoder_name = self._get_encoder_name_from_display(encoder_display) if encoder_display else ""
-            
-            # Si pas d'encodeur spécifié, utiliser un encodeur par défaut basé sur le codec
-            if not encoder_name:
-                codec = self.global_codec_var.get()
-                if codec == "webp":
-                    encoder_name = "libwebp"
-                elif codec == "h264":
-                    encoder_name = "libx264"
-                elif codec == "hevc":
-                    encoder_name = "libx265"
-                elif codec == "av1":
-                    encoder_name = "libaom-av1"
-                elif codec == "vp9":
-                    encoder_name = "libvpx-vp9"
-                elif codec == "jpegxl":
-                    encoder_name = "libjxl"
-                elif codec == "heic":
-                    encoder_name = "libx265"
-                elif codec == "avif":
-                    encoder_name = "libaom-av1"
-                elif codec == "flac":
-                    encoder_name = "flac"
-                elif codec == "aac":
-                    encoder_name = "aac"
-                elif codec == "mp3":
-                    encoder_name = "libmp3lame"
-                else:
-                    encoder_name = "libx264"  # Défaut général
-            
-            output_cfg.encoder = encoder_name
-            output_cfg.container = container
-            output_cfg.quality = self.quality_var.get()
-            output_cfg.cq_value = self.cq_var.get()
-            output_cfg.preset = self.preset_var.get()
-            output_cfg.video_mode = self.video_mode_var.get()
-            output_cfg.bitrate = self.bitrate_var.get()
-            output_cfg.multipass = self.multipass_var.get()
-
-            job = EncodeJob(src_path=p, mode=mode, initial_output_config=output_cfg)
-
-            if keep_structure and input_folder and not input_folder.startswith("(no") and out_root:
-                try:
-                    input_path_for_rel = Path(input_folder)
-                    if hasattr(p, 'is_relative_to') and p.is_relative_to(input_path_for_rel):
-                        job.relative_src_path = p.relative_to(input_path_for_rel)
-                    else:
-                        job.relative_src_path = Path(os.path.relpath(p, input_path_for_rel))
-                except (ValueError, AttributeError):
-                     job.relative_src_path = Path(p.name)
-            elif out_root:
-                job.relative_src_path = Path(p.name)
-            elif not out_root:
-                 job.relative_src_path = Path(p.name)
-
-            self.jobs.append(job)
-            job_id = job.job_id # Utiliser l'UUID du job comme identifiant unique
-
-            display_encoder = output_cfg.encoder or "-"
-            display_quality = output_cfg.quality or output_cfg.cq_value or output_cfg.bitrate or "-"
-
-            self.tree.insert("", "end", iid=job_id, values=(p.name, display_encoder, display_quality, "0%", "pending", "-"))
-            self.job_rows[job_id] = {"job": job}
-            current_batch_job_ids.append(job_id)
-        
-        if current_batch_job_ids:
-            self.last_import_job_ids = current_batch_job_ids
-            
-            # Appliquer les paramètres UI actuels aux nouveaux jobs
-            for job_id in current_batch_job_ids:
-                job_data = self.job_rows.get(job_id)
-                if job_data:
-                    job = job_data["job"]
-                    self._apply_ui_settings_to_job(job)
-                    self._update_job_row(job)
-
-        self._update_job_selector_combobox()
-        self._update_control_buttons_state('idle')
-        self._update_inspector_file_list()
-        if not any(j.status in ["running", "paused"] for j in self.jobs):
-            self._update_control_buttons_state("idle")
-
-    def _detect_mode(self, path: Path) -> str:
-        ext = path.suffix.lower()
-        video_exts = {".mp4", ".mov", ".mkv", ".avi", ".mxf", ".wmv"}
-        audio_exts = {".flac", ".m4a", ".aac", ".wav", ".ogg", ".mp3"}
-        image_exts = {".png", ".jpg", ".jpeg", ".webp", ".tiff", ".bmp"}
-        if ext == ".gif": return "gif"
-        if ext in video_exts: return "video"
-        if ext in audio_exts: return "audio"
-        if ext in image_exts: return "image"
-        return "unknown"
-
-    def _open_settings(self):
-        SettingsWindow(self.root, self.state.settings, self._update_codec_choices, self._update_preset_list)
-
-    def _on_double_click(self, event):
-        item_id = self.tree.identify_row(event.y)
-        if not item_id:
-            return
-        
-        job = next((j for j in self.jobs if j.src_path.name == item_id), None)
-        if job:
-            JobEditWindow(self.root, job, self.distributed_client)
-
-    def _select_input_folder(self):
-        folder = filedialog.askdirectory(title="Sélectionner un dossier d'entrée")
-        if folder:
-            self.input_folder.set(folder)
-            self._auto_import_from_folder(folder)
-
-    def _auto_import_from_folder(self, folder):
-        root_path = Path(folder)
-        if not root_path.is_dir():
-            messagebox.showerror("Invalid Folder", "The selected input folder does not exist.")
-            return
-            
-        video_exts = {".mp4", ".mov", ".mkv", ".avi", ".mxf", ".wmv", ".webm", ".flv", ".m4v", ".3gp"}
-        audio_exts = {".flac", ".m4a", ".aac", ".wav", ".ogg", ".mp3", ".wma", ".opus", ".ac3"}
-        image_exts = {".png", ".jpg", ".jpeg", ".webp", ".tiff", ".bmp", ".gif", ".tga", ".dds"}
-        
-        all_files = [p for p in root_path.rglob("*") if p.is_file() and p.suffix.lower() in (video_exts | audio_exts | image_exts)]
-        
-        if not all_files:
-            messagebox.showinfo("No Media Files Found", f"No media files found in: {folder}")
-            return
-            
-        self._enqueue_paths(all_files)
-        dialog_message = f"Imported {len(all_files)} files from:\n{folder}"
-        TransientInfoDialog(self.root, "Files Imported", dialog_message, auto_dismiss_ms=7000)
-
-    def _select_output_folder(self):
-        folder = filedialog.askdirectory(title="Select output folder")
-        if folder:
-            self.output_folder.set(folder)
-            if hasattr(self, 'output_folder_entry'):
-                self.output_folder_entry.config(foreground="black")
-            self._update_control_buttons_state('init')
-
-    def _start_encoding(self):
-        """Démarre l'encodage des jobs en attente"""
-        if not self.state.jobs:
-            messagebox.showinfo("No Jobs", "There are no jobs in the queue.")
-            return
-
-        if self.state.is_encoding:
-            messagebox.showwarning("Already Running", "Encoding is already in progress!")
-            return
-
-        output_folder_set = self.output_folder.get() and not self.output_folder.get().startswith("(no")
-        for job in self.state.jobs:
-            for output_cfg in job.outputs:
-                if not output_folder_set and not output_cfg.dst_path:
-                    messagebox.showwarning("Output Folder Missing", f"Output folder is not selected for job: {job.src_path.name}.")
-                    return
-
-        # Utiliser le contrôleur pour démarrer l'encodage
-        self.run_async_func(self.controller.start_encoding())
-
-    def _on_job_progress(self, progress: JobProgress):
-        job = next((j for j in self.jobs if j.job_id == progress.job_id), None)
-        if job:
-            self.root.after_idle(self._update_job_row, job)
-            self.root.after_idle(self._update_overall_progress)
-
-    def _on_job_completion(self, result: JobResult):
-        job = next((j for j in self.jobs if j.job_id == result.job_id), None)
-        if job:
-            job.status = result.status.value
-            self.root.after_idle(self._update_job_row, job)
-            self.root.after_idle(self._update_overall_progress)
-
-    def _on_all_jobs_finished(self):
-        self.is_running = False
-        self._update_control_buttons_state("idle")
-        self._show_encoding_completion_notification()
-        action = self.post_encode_action_var.get()
-        if action != "rien":
-            if messagebox.askyesno("Post-Encode Action", f"All encodes finished. Execute '{action}'?"):
-                self._execute_post_encode_action(action)
-
-    # Méthodes stub pour les fonctionnalités manquantes
-    def _batch_operations(self):
-        messagebox.showinfo("Non implémenté", "Fonctionnalité en cours de développement")
-
-    def _advanced_filters(self):
-        messagebox.showinfo("Non implémenté", "Fonctionnalité en cours de développement")
-
-    def _configure_audio_tracks(self):
-        messagebox.showinfo("Non implémenté", "Fonctionnalité en cours de développement")
-
-    def _manage_subtitles(self):
-        selected_items = self.tree.selection()
-        if not selected_items:
-            messagebox.showwarning("No Job Selected", "Please select a job from the queue to manage its subtitles.", parent=self.root)
-            return
-
-        item_id = selected_items[0] # Assuming single selection
-        job_data = self.job_rows.get(item_id)
-        if not job_data or "job" not in job_data:
-            messagebox.showerror("Error", "Could not find job data for the selected item.", parent=self.root)
-            return
-
-        selected_job = job_data["job"]
-        SubtitleManagementWindow(self.root, selected_job, self.state.settings)
-
-    def _clear_queue(self):
-        """Vide la queue d'encodage"""
-        self.controller.clear_queue()
-        # L'interface sera mise à jour automatiquement via _on_state_changed
-
-    def _reassign_selected_jobs(self):
-        """Réassigne les jobs sélectionnés à un serveur spécifique."""
-        selected_items = self.tree.selection()
-        if not selected_items:
-            messagebox.showwarning("Aucune sélection", "Veuillez sélectionner un ou plusieurs jobs dans la file d'attente.")
-            return
-        
-        # Récupérer les jobs correspondants
-        selected_jobs = []
-        for item_id in selected_items:
-            job_data = self.job_rows.get(item_id)
-            if job_data and "job" in job_data:
-                selected_jobs.append(job_data["job"])
-        
-        if not selected_jobs:
-            messagebox.showerror("Erreur", "Impossible de trouver les jobs sélectionnés.")
-            return
-        
-        # Obtenir la liste des serveurs connectés
-        connected_servers = self.state.get_connected_servers()
-        if not connected_servers:
-            messagebox.showwarning("Aucun serveur", "Aucun serveur distribué connecté pour la réassignation.")
-            return
-        
-        # Ouvrir la fenêtre de sélection de serveur
-        self._open_server_selection_dialog(selected_jobs, connected_servers)
-    
-    def _open_server_selection_dialog(self, selected_jobs: list, connected_servers: list):
-        """Ouvre une fenêtre de dialogue pour sélectionner le serveur de destination."""
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Réassigner Jobs")
-        dialog.geometry("600x500")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        dialog.resizable(True, True)
-        
-        main_frame = ttk.Frame(dialog, padding="10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Information sur les jobs sélectionnés
-        info_frame = ttk.LabelFrame(main_frame, text="Jobs Sélectionnés", padding="5")
-        info_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        job_list = ttk.Label(info_frame, text=f"{len(selected_jobs)} job(s) sélectionné(s):")
-        job_list.pack(anchor="w")
-        
-        for i, job in enumerate(selected_jobs[:3]):  # Afficher max 3 noms
-            job_label = ttk.Label(info_frame, text=f"• {job.src_path.name}")
-            job_label.pack(anchor="w", padx=(10, 0))
-        
-        if len(selected_jobs) > 3:
-            more_label = ttk.Label(info_frame, text=f"• ... et {len(selected_jobs) - 3} autre(s)")
-            more_label.pack(anchor="w", padx=(10, 0))
-        
-        # Sélection du serveur
-        server_frame = ttk.LabelFrame(main_frame, text="Serveur de Destination", padding="5")
-        server_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        ttk.Label(server_frame, text="Sélectionnez le serveur :").pack(anchor="w", pady=(0, 5))
-        
-        server_var = tk.StringVar()
-        server_info_dict = {}
-        
-        for server in connected_servers:
-            server_name = f"{server.name} ({getattr(server, 'host', getattr(server, 'ip', 'unknown'))}:{server.port})"
-            server_info_dict[server_name] = server
-        
-        server_names = list(server_info_dict.keys())
-        server_combo = ttk.Combobox(server_frame, textvariable=server_var, 
-                                   values=server_names, state="readonly", width=50)
-        server_combo.pack(fill=tk.X, pady=(0, 10))
-        if server_names:
-            server_var.set(server_names[0])
-        
-        # Informations du serveur sélectionné
-        info_text = tk.Text(server_frame, height=8, wrap=tk.WORD, state=tk.DISABLED)
-        info_text.pack(fill=tk.BOTH, expand=True)
-        
-        def update_server_info(*args):
-            """Met à jour les informations du serveur sélectionné."""
-            try:
-                selected_name = server_var.get()
-                if selected_name and selected_name in server_info_dict:
-                    server = server_info_dict[selected_name]
-                    
-                    info_text.config(state=tk.NORMAL)
-                    info_text.delete(1.0, tk.END)
-                    
-                    info_lines = [
-                        f"Statut: {getattr(server.status, 'value', 'inconnu')}",
-                        f"Jobs actifs: {getattr(server, 'current_jobs', 0)}/{getattr(server, 'max_jobs', '?')}",
-                        f"CPU: {getattr(server.capabilities, 'cpu_cores', '?')} cœurs" + 
-                              (f" ({server.capabilities.current_load:.1%} charge)" if hasattr(server.capabilities, 'current_load') else ""),
-                        f"RAM: {getattr(server.capabilities, 'memory_gb', '?')} GB" if hasattr(server, 'capabilities') else "RAM: ?",
-                        "",
-                        "Encodeurs logiciels:",
-                        f"  {', '.join(server.capabilities.software_encoders) if hasattr(server, 'capabilities') and server.capabilities.software_encoders else 'Aucun'}",
-                        "",
-                        "Encodeurs matériels:"
-                    ]
-                    
-                    if hasattr(server, 'capabilities') and server.capabilities and server.capabilities.hardware_encoders:
-                        for hw_type, encoders in server.capabilities.hardware_encoders.items():
-                            if encoders:
-                                info_lines.append(f"  {hw_type.upper()}: {', '.join(encoders)}")
-                    else:
-                        info_lines.append("  Aucun")
-                    
-                    info_text.insert(1.0, "\n".join(info_lines))
-                    info_text.config(state=tk.DISABLED)
-                else:
-                    info_text.config(state=tk.NORMAL)
-                    info_text.delete(1.0, tk.END)
-                    info_text.insert(1.0, "Aucun serveur sélectionné")
-                    info_text.config(state=tk.DISABLED)
-            except Exception as e:
-                # Protection contre les erreurs lors de l'accès aux propriétés du serveur
-                try:
-                    info_text.config(state=tk.NORMAL)
-                    info_text.delete(1.0, tk.END)
-                    info_text.insert(1.0, f"Erreur lors de l'affichage: {e}")
-                    info_text.config(state=tk.DISABLED)
-                except:
-                    pass  # Si même ça échoue, on ignore
-        
-        server_combo.bind('<<ComboboxSelected>>', lambda e: update_server_info())
-        update_server_info()  # Mise à jour initiale
-        
-        # Boutons
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill=tk.X, pady=(10, 0))
-        
-        def confirm_reassignment():
-            selected_server_name = server_var.get()
-            if not selected_server_name:
-                messagebox.showwarning("Erreur", "Veuillez sélectionner un serveur.")
-                return
-            
-            target_server = server_info_dict[selected_server_name]
-            
-            # Vérifier la compatibilité avant réassignation
-            incompatible_jobs = []
-            for job in selected_jobs:
-                if not self._check_job_server_compatibility(job, target_server):
-                    incompatible_jobs.append(job.src_path.name)
-            
-            if incompatible_jobs:
-                warning_msg = f"Attention : {len(incompatible_jobs)} job(s) peuvent être incompatibles :\n"
-                warning_msg += "\n".join(f"• {name}" for name in incompatible_jobs[:5])
-                if len(incompatible_jobs) > 5:
-                    warning_msg += f"\n• ... et {len(incompatible_jobs) - 5} autre(s)"
-                warning_msg += "\n\nContinuer quand même ?"
-                
-                if not messagebox.askyesno("Compatibilité", warning_msg):
-                    return
-            
-            # Effectuer la réassignation
-            self.run_async_func(self._perform_jobs_reassignment(selected_jobs, target_server), self.loop)
-            dialog.destroy()
-        
-        ttk.Button(button_frame, text="Réassigner", command=confirm_reassignment).pack(side=tk.RIGHT, padx=(5, 0))
-        ttk.Button(button_frame, text="Annuler", command=dialog.destroy).pack(side=tk.RIGHT)
-        
-        # Donner le focus à la combobox
-        dialog.after(100, lambda: server_combo.focus_set())
-    
-    def _check_job_server_compatibility(self, job, server) -> bool:
-        """Vérifie si un job est compatible avec un serveur."""
-        # Récupérer l'encodeur du premier output du job
-        if not job.outputs:
-            return True  # Pas d'output configuré, on assume compatible
-        
-        encoder = job.outputs[0].encoder
-        if not encoder:
-            return True  # Pas d'encodeur spécifié
-        
-        # Vérifier si l'encodeur est disponible sur le serveur
-        all_server_encoders = (
-            server.capabilities.software_encoders +
-            [enc for encoders in server.capabilities.hardware_encoders.values() for enc in encoders]
-        )
-        
-        return encoder in all_server_encoders
-    
-    async def _perform_jobs_reassignment(self, jobs: list, target_server):
-        """Effectue la réassignation asynchrone des jobs vers le serveur cible."""
-        success_count = 0
-        error_count = 0
-        
-        for job in jobs:
-            try:
-                # Convertir le job en JobConfiguration pour le système distribué
-                job_config = self._convert_job_to_distributed_config(job, target_server)
-                
-                # Soumettre le job au serveur spécifié
-                success = await self.distributed_client.send_job_to_server(
-                    target_server.server_id, 
-                    job_config,
-                    lambda progress: self._on_job_progress(progress),
-                    lambda result: self._on_job_completion(result)
+        for media_type, button in self.media_type_buttons.items():
+            if media_type == current_type:
+                # Bouton sélectionné : bleu avec texte blanc
+                button.config(
+                    bg="#0078d4",  # Bleu Microsoft
+                    fg="white",
+                    relief=tk.SUNKEN,
+                    bd=3,
+                    font=("Arial", 9, "bold")
                 )
-                
-                if success:
-                    success_count += 1
-                    # Mettre à jour l'affichage du job
-                    self._update_job_status_display(job, f"Assigné à {target_server.name}")
-                else:
-                    error_count += 1
-                    
-            except Exception as e:
-                self.logger.error(f"Erreur lors de la réassignation du job {job.src_path.name}: {e}")
-                error_count += 1
+            else:
+                # Bouton non sélectionné : gris clair
+                button.config(
+                    bg="#f0f0f0",
+                    fg="black",
+                    relief=tk.RAISED,
+                    bd=2,
+                    font=("Arial", 9, "normal")
+                )
+
+
+
+    def _adapt_ui_simple(self, media_type):
+        """Adaptation simple et directe de l'interface selon le type de média"""
+        self.logger.info(f"🎨 ADAPTATION SIMPLE pour: {media_type}")
         
-        # Afficher le résultat
-        if success_count > 0:
-            message = f"✅ {success_count} job(s) réassigné(s) avec succès à {target_server.name}"
-            if error_count > 0:
-                message += f"\n❌ {error_count} job(s) en erreur"
-            messagebox.showinfo("Réassignation Terminée", message)
+        # Masquer TOUTES les sections d'abord
+        all_frames = [
+            self.transform_frame,
+            self.format_frame, 
+            self.quality_frame,
+            self.hdr_frame,
+            self.subtitle_frame,
+            self.lut_frame
+        ]
+        
+        for frame in all_frames:
+            frame.pack_forget()
+            self.logger.info(f"❌ Frame masquée: {frame}")
+        
+        # Puis afficher seulement celles nécessaires
+        if media_type == "video":
+            frames_to_show = [
+                self.transform_frame,
+                self.format_frame,
+                self.quality_frame,
+                self.hdr_frame,
+                self.subtitle_frame,
+                self.lut_frame
+            ]
+        elif media_type == "audio":
+            frames_to_show = [
+                self.format_frame,
+                self.quality_frame
+            ]
+        elif media_type == "image":
+            frames_to_show = [
+                self.transform_frame,
+                self.format_frame,
+                self.quality_frame,
+                self.lut_frame
+            ]
         else:
-            messagebox.showerror("Erreur", f"Impossible de réassigner les jobs à {target_server.name}")
-    
-    def _convert_job_to_distributed_config(self, job, target_server):
-        """Convertit un EncodeJob local en JobConfiguration pour le système distribué."""
-        from shared.messages import JobConfiguration, EncoderType
+            frames_to_show = []
         
-        # Utiliser le premier output comme référence
-        output_cfg = job.outputs[0] if job.outputs else None
+        # Afficher les frames nécessaires
+        for frame in frames_to_show:
+            frame.pack(fill=tk.X, pady=(0, 5))
+            self.logger.info(f"✅ Frame affichée: {frame}")
         
-        return JobConfiguration(
-            job_id=str(uuid.uuid4()),
-            input_file=str(job.src_path),
-            output_file=str(output_cfg.dst_path) if output_cfg else str(job.src_path.with_suffix('.out')),
-            encoder=output_cfg.encoder if output_cfg else 'libx264',
-            encoder_type=EncoderType.SOFTWARE,  # Sera déterminé côté serveur
-            preset=output_cfg.preset if output_cfg else None,
-            quality_mode=output_cfg.video_mode if output_cfg else 'quality',
-            quality_value=output_cfg.quality if output_cfg else '22',
-            filters=[],
-            ffmpeg_args=[],
-            required_capabilities=[],
-            priority=5,
-            estimated_duration=None,
-            file_size=job.src_path.stat().st_size if job.src_path.exists() else 0,
-            resolution="1920x1080",  # Valeur par défaut
-            codec=output_cfg.encoder.split('_')[0] if output_cfg and output_cfg.encoder else 'h264',
-            container=output_cfg.container if output_cfg else 'mp4'
-        )
-    
-    def _update_job_status_display(self, job, status_text: str):
-        """Met à jour l'affichage du statut d'un job dans la TreeView."""
-        job_id = job.job_id
-        if job_id in self.tree.get_children():
-            current_values = list(self.tree.item(job_id)['values'])
-            if len(current_values) >= 5:
-                current_values[4] = status_text  # Colonne statut
-                self.tree.item(job_id, values=current_values)
-
-    def _save_preset(self):
-        preset_name = simpledialog.askstring("Sauvegarder le Préréglage", "Nom du préréglage:", parent=self.root)
-        if not preset_name or not preset_name.strip():
-            return
-
-        preset_data = {
-            "media_type": self.global_type_var.get(),
-            "container": self.container_var.get(),
-            "codec": self.global_codec_var.get(),
-            "encoder": self._get_encoder_name_from_display(self.global_encoder_var.get()),
-            "video_mode": self.video_mode_var.get(),
-            "quality_or_cq": self.quality_var.get(),
-            "bitrate": self.bitrate_var.get(),
-            "multipass": self.multipass_var.get(),
-            "preset": self.preset_var.get(),
-            "resolution": self.resolution_var_settings.get(),
-            "crop": {
-                "top": self.crop_top_var.get(),
-                "bottom": self.crop_bottom_var.get(),
-                "left": self.crop_left_var.get(),
-                "right": self.crop_right_var.get()
-            },
-            "preserve_hdr": self.preserve_hdr_var.get(),
-            "tonemap": self.tonemap_var.get(),
-            "tonemap_method": self.tonemap_method_var.get(),
-            "subtitle_mode": self.subtitle_mode_var.get(),
-            "lut_path": self.lut_path_var.get(),
-            "watermark_path": self.watermark_path_var.get(),
-            "watermark_position": self.watermark_position_var.get(),
-            "watermark_scale": self.watermark_scale_var.get(),
-            "watermark_opacity": self.watermark_opacity_var.get(),
-            "watermark_padding": self.watermark_padding_var.get(),
-        }
-
-        self.state.save_preset(preset_name, preset_data)
+        # Forcer la mise à jour
+        self.root.update()
+        self.root.update_idletasks()
         
-        self._update_preset_list()
-        messagebox.showinfo("Succès", f"Préréglage '{preset_name}' sauvegardé.")
-
-    def _load_preset_by_name(self, name):
-        preset_data = self.state.load_preset(name)
-        if not preset_data:
-            messagebox.showerror("Erreur", f"Préréglage '{name}' non trouvé.")
-            return
-
-        # Appliquer les valeurs du préréglage à l'UI
-        self.global_type_var.set(preset_data.get("media_type", "video"))
-        self._update_media_type_ui(self.global_type_var.get())
-        
-        self.container_var.set(preset_data.get("container", ""))
-        self.global_codec_var.set(preset_data.get("codec", ""))
-        
-        # Mettre à jour les choix de codec AVANT de définir l'encodeur
-        # Pass the media type from preset to ensure codec choices are for the correct type
-        self._update_codec_choices(for_media_type=preset_data.get("media_type", "video"))
-
-        def apply_remaining_preset():
-            encoder_name = preset_data.get("encoder", "")
-            encoder_display = ""
-            # On cherche la description complète de l'encodeur pour l'afficher
-            # Values in global_encoder_combo should be populated by _update_encoder_choices,
-            # which is called by _update_codec_choices if codec changes, or by orchestrator.
-            # Ensure encoder choices are for the *preset's codec* before finding display name.
-            # This might require calling _update_encoder_choices here if not already done correctly.
-            # For now, assume self.global_encoder_combo['values'] is correctly populated for the preset's codec.
-            # This implies _update_codec_choices correctly set the preset's codec, and then called _update_encoder_choices.
-            # Let's call _update_encoder_choices explicitly for the preset's codec to be safe.
-            self._update_encoder_choices(for_media_type=self.global_type_var.get(), codec=self.global_codec_var.get())
-
-            for item_val in self.global_encoder_combo['values']:
-                if item_val.startswith(encoder_name):
-                    encoder_display = item_val
-                    break
-            self.global_encoder_var.set(encoder_display or encoder_name)
-
-            self.video_mode_var.set(preset_data.get("video_mode", "quality"))
-            self.quality_var.set(str(preset_data.get("quality_or_cq", "22")))
-            self.bitrate_var.set(str(preset_data.get("bitrate", "4000")))
-            self.multipass_var.set(preset_data.get("multipass", False))
-            self.preset_var.set(preset_data.get("preset", "medium")) # This is encoder preset
-
-            self.resolution_var_settings.set(preset_data.get("resolution", "Keep Original"))
-            crop_settings = preset_data.get("crop", {})
-            self.crop_top_var.set(str(crop_settings.get("top", "0")))
-            self.crop_bottom_var.set(str(crop_settings.get("bottom", "0")))
-            self.crop_left_var.set(str(crop_settings.get("left", "0")))
-            self.crop_right_var.set(str(crop_settings.get("right", "0")))
-            
-            self.preserve_hdr_var.set(preset_data.get("preserve_hdr", True))
-            self.tonemap_var.set(preset_data.get("tonemap", False))
-            self.tonemap_method_var.set(preset_data.get("tonemap_method", "hable"))
-
-            self.subtitle_mode_var.set(preset_data.get("subtitle_mode", "copy"))
-            self.subtitle_path_var.set(preset_data.get("subtitle_path", ""))
-            self.lut_path_var.set(preset_data.get("lut_path", ""))
-            watermark_cfg = preset_data.get("watermark", {})
-            self.watermark_path_var.set(watermark_cfg.get('path', ""))
-            self.watermark_position_var.set(watermark_cfg.get('position', "top_right"))
-            self.watermark_scale_var.set(float(watermark_cfg.get('scale', 0.1)))
-            self.watermark_opacity_var.set(float(watermark_cfg.get('opacity', 1.0)))
-            self.watermark_padding_var.set(int(watermark_cfg.get('padding', 10)))
-            self.custom_flags_var.set(preset_data.get("custom_flags", ""))
-
-
-            # After setting all StringVars from preset_data, call the main UI orchestrator.
-            self._update_ui_for_media_type_and_settings(
-                media_type=self.global_type_var.get(), # This was set from preset
-                output_config=None, # Preset is loaded into global view, not a specific job's output
-                is_global_context=True
-            )
-            messagebox.showinfo("Préréglage chargé", f"Le préréglage '{name}' a été chargé.")
-
-        self.root.after(100, apply_remaining_preset)
-        
-    def _show_log_viewer(self):
-        messagebox.showinfo("Non implémenté", "Fonctionnalité en cours de développement")
-
-    def _toggle_watch(self):
-        messagebox.showinfo("Non implémenté", "Surveillance de dossier en cours de développement")
-
-    def _update_control_buttons_state(self, state):
-        has_jobs = bool(self.jobs)
-        if state == "running":
-            self.start_btn.config(state="disabled")
-            self.pause_btn.config(state="normal")
-            self.resume_btn.config(state="disabled")
-            self.cancel_btn.config(state="normal")
-        elif state == "paused":
-            self.start_btn.config(state="disabled")
-            self.pause_btn.config(state="disabled")
-            self.resume_btn.config(state="normal")
-            self.cancel_btn.config(state="normal")
-        else: # idle, init, or finished
-            self.start_btn.config(state="normal" if has_jobs else "disabled")
-            self.pause_btn.config(state="disabled")
-            self.resume_btn.config(state="disabled")
-            self.cancel_btn.config(state="disabled")
-
-    def _update_preset_list(self):
-        #je dois aussi mettre à jour le menu des préréglages
-        preset_menu = self.menubar.winfo_children()[2] # Attention, c'est fragile
-        preset_menu.delete(2, tk.END) # Supprimer les anciens préréglages
-        
-        presets = self.state.get_preset_names()
-        self.preset_combo['values'] = presets
-        self.watch_preset_combo['values'] = presets
-        
-        for preset_name in presets:
-            preset_menu.add_command(label=preset_name, command=lambda name=preset_name: self._load_preset_by_name(name))
-
-    def _update_codec_choices(self, for_media_type: Optional[str] = None):
-        media_type_to_use = for_media_type if for_media_type is not None else self.global_type_var.get()
-        self.logger.debug(f"Updating codec choices for media type: {media_type_to_use}")
-
-        all_codecs = FFmpegHelpers.available_codecs()
-        codecs_for_type = all_codecs.get(media_type_to_use, [])
-        
-        current_codec_val = self.global_codec_var.get() # Preserve current if valid in new list
-        self.global_codec_combo['values'] = codecs_for_type
-        
-        if current_codec_val and current_codec_val in codecs_for_type:
-            self.global_codec_var.set(current_codec_val)
-        elif codecs_for_type:
-            self.global_codec_var.set(codecs_for_type[0])
-        else:
-            self.global_codec_var.set("")
-            
-        # Important: Do NOT call _update_encoder_choices() here directly if this method
-        # is part of a larger refresh sequence (e.g., called by _update_ui_for_media_type_and_settings).
-        # The orchestrating method should handle the sequence.
-        # If called standalone (e.g. directly from _on_media_type_change's first step),
-        # then the caller is responsible for the next step.
+        self.logger.info(f"🏁 ADAPTATION TERMINÉE pour: {media_type}")
 
     def _update_media_type_ui(self, media_type):
-        is_video = media_type == "video"
-        is_audio = media_type == "audio"
-        is_image = media_type == "image"
+        """Version simplifiée - délègue à _adapt_ui_simple"""
+        self.logger.info(f"🔄 _update_media_type_ui délègue vers _adapt_ui_simple")
+        self._adapt_ui_simple(media_type)
         
-        self.logger.info(f"🎯 Adaptation interface pour type: {media_type}")
+        # Rafraîchir les listes dépendantes du média
+        self._new_update_codec_choices(for_media_type=media_type)
+        self._new_update_encoder_choices(for_media_type=media_type)
+        self._new_update_container_choices(for_media_type=media_type)
 
-        # Gérer l'affichage intelligent des sections selon le type de média
-        if is_video:
-            # Video: toutes les sections disponibles
-            self.transform_frame.pack(fill=tk.X, pady=(0, 5))
-            self.quality_frame.pack(fill=tk.X, pady=(0, 5))
-            self.hdr_frame.pack(fill=tk.X, pady=(0, 5))
-            self.subtitle_frame.pack(fill=tk.X, pady=(0, 5))
-            self.lut_frame.pack(fill=tk.X, pady=(0, 5))
-            self.codec_label.config(text="Codec Vidéo:")
-            
-        elif is_audio:
-            # Audio: seulement qualité et codec visibles
-            self.transform_frame.pack_forget()  # Résolution non pertinente
-            self.quality_frame.pack(fill=tk.X, pady=(0, 5))  # Qualité importante
-            self.hdr_frame.pack_forget()  # HDR non pertinent
-            self.subtitle_frame.pack_forget()  # Sous-titres non pertinents
-            self.lut_frame.pack_forget()  # LUT non pertinent pour audio
-            self.codec_label.config(text="Codec Audio:")
-            
-        elif is_image:
-            # Images: résolution, qualité et LUT utiles - pas HDR ni sous-titres
-            self.transform_frame.pack(fill=tk.X, pady=(0, 5))  # Résolution utile pour images
-            self.quality_frame.pack(fill=tk.X, pady=(0, 5))  # Qualité essentielle pour images
-            self.hdr_frame.pack_forget()  # HDR pas pertinent
-            self.subtitle_frame.pack_forget()  # Sous-titres non pertinents
-            self.lut_frame.pack(fill=tk.X, pady=(0, 5))  # LUT utile pour images
-            self.codec_label.config(text="Codec Image:")
+    def _on_codec_change(self, event=None):
+        """Appelé quand le codec sélectionné change."""
+        codec_display_name = self.global_codec_var.get()
+        codec_name = self.codec_name_map.get(codec_display_name, "")
+        self.logger.info(f"Codec changé vers: {codec_display_name} ({codec_name})")
+        self.logger.debug(f"Codec name map actuel: {self.codec_name_map}")
         
-        self.root.after(100, self._update_scroll_state)
-
-    def _update_job_selector_combobox(self):
-        job_names = [job.src_path.name for job in self.jobs]
-        self.job_selector_combobox['values'] = job_names
-        if job_names:
-            self.job_selector_combobox.set(job_names[-1])
-            # Setting the combobox value will trigger its <<ComboboxSelected>> event,
-            # which is bound to _on_job_selected_for_settings_change.
-            # _on_job_selected_for_settings_change now calls the new orchestrator.
-            # So, no explicit call to load settings is needed here anymore.
-        elif not job_names and hasattr(self, 'selected_job_for_settings_var'):
-            # No jobs, clear the selection and revert UI to global defaults
-            self.selected_job_for_settings_var.set("")
-            # Trigger update to global defaults if no job is selected
-            current_global_media_type = self.state.global_media_type
-            self._update_ui_for_media_type_and_settings(current_global_media_type, output_config=None, is_global_context=True)
-
-
-    def _update_inspector_file_list(self):
-        self.inspector_tree.delete(*self.inspector_tree.get_children())
-        for job in self.jobs:
-            self.inspector_tree.insert("", "end", iid=job.job_id, values=(job.src_path.name,))
-
-    def _update_job_row(self, job: EncodeJob):
-        job_id = job.job_id
-        if job_id in self.tree.get_children():
-            status = job.get_overall_status()
-            progress = job.get_overall_progress()
-            
-            # Utiliser le premier output pour l'affichage (simplification)
-            output_cfg = job.outputs[0]
-            encoder = output_cfg.encoder or "N/A"
-            quality_val = ""
-            if output_cfg.video_mode == "quality":
-                quality_val = f"CQ {output_cfg.quality}"
-            elif output_cfg.video_mode == "bitrate":
-                quality_val = f"{output_cfg.bitrate} kbps"
-
-            self.tree.item(job_id, values=(
-                job.src_path.name,
-                encoder,
-                quality_val,
-                f"{progress:.1f}%",
-                status,
-                self.server_map.get(job.assigned_to, "En attente...") if job.assigned_to else "En attente..."
-            ))
-
-    def _update_overall_progress(self):
-        total_progress = 0
-        active_jobs = [j for j in self.jobs if j.get_overall_status() not in ("pending", "finished", "failed")]
-        if not active_jobs:
-            self.progress_bar['value'] = 0
+        if not codec_name:
+            self.logger.warning(f"Codec '{codec_display_name}' non trouvé dans le mapping")
             return
             
-        for job in active_jobs:
-            total_progress += job.get_overall_progress()
-            
-        overall_percentage = total_progress / len(active_jobs)
-        self.progress_bar['value'] = overall_percentage
+        self.state.update_global_encoding_settings(codec=codec_name)
+        self._new_update_encoder_choices()
+        self._new_update_container_choices()
 
-    def _show_encoding_completion_notification(self):
-        messagebox.showinfo("Terminé", "Tous les encodages sont terminés !")
-
-    def _execute_post_encode_action(self, action):
-        if action == "shutdown":
-            if messagebox.askyesno("Éteindre", "Voulez-vous vraiment éteindre l'ordinateur ?"):
-                if sys.platform == "win32":
-                    os.system("shutdown /s /t 1")
-                elif sys.platform == "darwin":
-                    os.system("sudo shutdown -h now")
-                else: # linux
-                    os.system("sudo shutdown -h now")
-        elif action == "sleep":
-             if sys.platform == "win32":
-                os.system("rundll32.exe powrprof.dll,SetSuspendState 0,1,0")
-             elif sys.platform == "darwin":
-                os.system("pmset sleepnow")
-             else: # linux
-                os.system("systemctl suspend")
-
-    def _get_container_from_display(self, display):
-        return display.split(" ")[0].lower() if display else ""
-
-    def _get_encoder_name_from_display(self, display):
-        return display.split(" ")[0] if display else ""
-
-    def _setup_drag_drop(self):
-        if self.dnd_available:
-            try:
-                from tkinterdnd2 import DND_FILES
-                self.root.drop_target_register(DND_FILES)
-                self.root.dnd_bind('<<Drop>>', self._on_drop)
-                self.logger.info("✅ Drag and drop configuré avec succès")
-            except Exception as e:
-                self.logger.error(f"❌ Échec de la configuration du drag and drop: {e}")
-                self.dnd_available = False
-        else:
-            self.logger.warning("⚠️ TkinterDnD2 non disponible - drag and drop désactivé")
-
-    def _on_drop(self, event):
-        """Gère le drag & drop de fichiers"""
-        paths = self.root.tk.splitlist(event.data)
-        file_paths = [Path(p) for p in paths]
-        
-        # Utiliser le contrôleur pour ajouter les fichiers
-        added_jobs = self.controller.add_files_to_queue(file_paths)
-        
-        if added_jobs:
-            self.logger.info(f"✅ {len(added_jobs)} fichiers ajoutés via drag & drop")
-        else:
-            self.logger.warning("⚠️ Aucun fichier valide ajouté")
-
-    # Méthodes manquantes de _build_encoding_section
-    def _on_job_selected_for_settings_change(self, event=None):
-        selected_job_name = self.selected_job_for_settings_var.get()
-        if not selected_job_name:
-            # No job selected in combobox, revert to global settings view
-            # The global_type_var should already reflect the user's choice in the main media type dropdown.
-            # Or, if AppState's global_media_type is the source of truth, sync from that.
-            # For now, assume global_type_var is the current global context.
-            current_global_media_type = self.state.global_media_type # Get from AppState
-            self.global_type_var.set(current_global_media_type) # Ensure UI var matches
-            self._update_ui_for_media_type_and_settings(current_global_media_type, output_config=None, is_global_context=True)
-            return
-
-        target_job = next((j for j in self.state.jobs if j.src_path.name == selected_job_name), None)
-
-        if not target_job:
-            self.logger.warning(f"Job '{selected_job_name}' not found for settings configuration.")
-            # Fallback to global settings view if job disappears or something unexpected.
-            current_global_media_type = self.state.global_media_type
-            self.global_type_var.set(current_global_media_type)
-            self._update_ui_for_media_type_and_settings(current_global_media_type, output_config=None, is_global_context=True)
-            return
-
-        # We have a target_job. Update the encoding settings UI based on its type and settings.
-        job_media_type = target_job.mode
-
-        # Set the global_type_var to the job's media type for visual consistency in the media type dropdown.
-        # This specific `set` should not trigger a global context change by `_on_media_type_change`.
-        # The `is_global_context=False` in the call below handles this.
-        if self.global_type_var.get() != job_media_type: # Only set if different to avoid unnecessary trace fires
-            self.global_type_var.set(job_media_type)
-
-        # Pass the first output's config. Jobs should ideally always have at least one.
-        job_output_config = target_job.outputs[0] if target_job.outputs else None
-        if not job_output_config:
-             self.logger.warning(f"Job '{selected_job_name}' has no output configurations. UI might not fully update.")
-             # Create a temporary default OutputConfig for UI purposes if needed, or handle gracefully.
-             # For now, pass None, _update_ui_for_media_type_and_settings will use defaults for the job's media type.
-
-        self._update_ui_for_media_type_and_settings(job_media_type, output_config=job_output_config, is_global_context=False)
-
-    def _apply_ui_settings_to_selected_job_via_combobox(self):
-        selected_job_name = self.selected_job_for_settings_var.get()
-        if not selected_job_name:
-            messagebox.showwarning("Aucun Job", "Veuillez sélectionner un job dans la liste déroulante.")
-            return
-
-        target_job = next((j for j in self.jobs if j.src_path.name == selected_job_name), None)
-        if not target_job:
-            messagebox.showerror("Erreur", "Job non trouvé.")
-            return
-        
-        self._apply_ui_settings_to_job(target_job)
-        self._update_job_row(target_job)
-        messagebox.showinfo("Appliqué", f"Les paramètres ont été appliqués à {target_job.src_path.name}")
-
-    def _apply_ui_settings_to_last_import_batch(self):
-        if not self.last_import_job_ids:
-            messagebox.showwarning("Aucun import récent", "Aucun import récent à modifier.")
-            return
-
-        if not messagebox.askyesno("Confirmer", f"Appliquer les paramètres actuels aux {len(self.last_import_job_ids)} derniers fichiers importés ?"):
-            return
-
-        for job_id in self.last_import_job_ids:
-            job_data = self.job_rows.get(job_id)
-            if job_data:
-                job = job_data["job"]
-                self._apply_ui_settings_to_job(job)
-                self._update_job_row(job)
-        
-        messagebox.showinfo("Succès", f"Paramètres appliqués à {len(self.last_import_job_ids)} jobs.")
-
-    def _on_subtitle_mode_change(self, event=None):
-        mode = self.subtitle_mode_var.get()
-        show_external_frame = mode in ["burn", "embed"]
-        
-        if show_external_frame:
-            self.external_subtitle_frame.grid(row=1, column=0, columnspan=3, sticky="ew", pady=2)
-        else:
-            self.external_subtitle_frame.grid_forget()
-
-    def _browse_subtitle_file(self):
-        filename = filedialog.askopenfilename(
-            title="Sélectionner un fichier de sous-titres",
-            filetypes=[("Sous-titres", "*.srt *.ass *.ssa *.vtt *.sub"), ("Tous les fichiers", "*.*")]
-        )
-        if filename:
-            self.subtitle_path_var.set(filename)
-
-    def _browse_lut_file(self):
-        filename = filedialog.askopenfilename(
-            title="Sélectionner un fichier LUT",
-            filetypes=[("Fichiers LUT", "*.cube *.look *.3dl"), ("Tous les fichiers", "*.*")]
-        )
-        if filename:
-            self.lut_path_var.set(filename)
-
-    def _browse_watermark_file(self):
-        filename = filedialog.askopenfilename(
-            title="Sélectionner un watermark",
-            filetypes=[("Images PNG", "*.png"), ("Tous les fichiers", "*.*")]
-        )
-        if filename:
-            self.watermark_path_var.set(filename)
-
-    def _on_right_click(self, event):
-        """Menu contextuel pour le click droit sur la liste des jobs"""
-        pass
-
-    def _on_queue_selection_change(self, event):
-        """Appelée quand la sélection change dans la liste des jobs"""
-        pass
-
-    def _pause_all(self):
-        """Pause tous les jobs en cours"""
-        messagebox.showinfo("Non implémenté", "Pause des jobs en cours de développement")
-
-    def _resume_all(self):
-        """Reprend tous les jobs en pause"""
-        messagebox.showinfo("Non implémenté", "Reprise des jobs en cours de développement")
-
-    def _stop_all(self):
-        """Arrête tous les jobs en cours"""
-        messagebox.showinfo("Non implémenté", "Arrêt des jobs en cours de développement")
-
-    def _apply_ui_settings_to_job(self, job):
-        """Applique les paramètres de l'UI à un job"""
-        if not job.outputs:
-            # Créer un OutputConfig par défaut si aucun n'existe
-            from core.encode_job import OutputConfig
-            output_name = f"{job.src_path.stem} - Default"
-            dst_path = job.src_path.with_suffix(f".{self.container_var.get()}")
-            output_cfg = OutputConfig(output_name, dst_path, job.mode)
-            job.outputs.append(output_cfg)
-        
-        # Appliquer les paramètres UI au premier output
-        output_cfg = job.outputs[0]
-        
-        # Mettre à jour le mode de job si nécessaire
-        job.mode = self.global_type_var.get()
-        output_cfg.mode = job.mode
-        
-        # Encodeur et codec
-        encoder_display = self.global_encoder_var.get()
-        output_cfg.encoder = self._get_encoder_name_from_display(encoder_display)
-        output_cfg.codec = self.global_codec_var.get() # Apply the selected codec
-        
-        # Container et chemin de destination
+    def _on_encoder_change(self, event=None):
+        """Appelé quand l'encodeur sélectionné change."""
+        encoder = self.global_encoder_var.get()
+        self.logger.info(f"Encodeur changé vers: {encoder}")
+        self.state.update_global_encoding_settings(encoder=encoder)
+        self._update_quality_preset_controls(encoder=encoder)
+    
+    def _on_container_change(self, event=None):
+        """Appelé quand le conteneur sélectionné change."""
         container = self.container_var.get()
-        output_cfg.container = container
-        if container:
-            output_cfg.dst_path = job.src_path.with_suffix(f".{container}")
+        self.logger.info(f"Conteneur changé vers: {container}")
+        self.state.update_global_encoding_settings(container=container)
+
+    def _get_current_job_output_config_for_ui(self) -> Optional[OutputConfig]:
+        """Helper to get the OutputConfig for the currently selected job in the settings UI, or None."""
+        job_id = self.selected_job_for_settings_var.get()
+        if not job_id:
+            return None
+
+        job = self.state.get_job_by_id(job_id)
+        if job and job.outputs:
+            return job.outputs[0]
         
-        # Paramètres de qualité
-        output_cfg.video_mode = self.video_mode_var.get()
-        output_cfg.quality = self.quality_var.get()
-        output_cfg.bitrate = self.bitrate_var.get()
-        output_cfg.multipass = self.multipass_var.get()
-        output_cfg.preset = self.preset_var.get()
-        
-        # Paramètres personnalisés
-        output_cfg.custom_flags = self.custom_flags_var.get()
+        return None
 
     def _cancel_all(self):
         """Annule tous les jobs en cours"""
@@ -2216,12 +1180,22 @@ class MainWindow:
         messagebox.showinfo("Non implémenté", "Duplication des jobs en cours de développement")
 
     def _pause_selected_job(self):
-        """Pause le job sélectionné"""
-        messagebox.showinfo("Non implémenté", "Pause du job en cours de développement")
+        #this part do that
+        selected_items = self.tree.selection()
+        if not selected_items:
+            return
+        job_ids = [self.job_rows[item]['job'].job_id for item in selected_items if item in self.job_rows]
+        for jid in job_ids:
+            self.controller.pause_job(jid)
 
     def _resume_selected_job(self):
-        """Reprend le job sélectionné"""
-        messagebox.showinfo("Non implémenté", "Reprise du job en cours de développement")
+        #this other part do that
+        selected_items = self.tree.selection()
+        if not selected_items:
+            return
+        job_ids = [self.job_rows[item]['job'].job_id for item in selected_items if item in self.job_rows]
+        for jid in job_ids:
+            self.controller.resume_job(jid)
 
     def _cancel_selected_job(self):
         """Annule le job sélectionné"""
@@ -2234,9 +1208,9 @@ class MainWindow:
             return
         
         if messagebox.askyesno("Confirmer", "Supprimer les jobs sélectionnés de la file d'attente ?"):
-            for item_id in selected_items:
-                self.tree.delete(item_id)
-                job_to_remove = self.job_rows.pop(item_id, {}).get("job")
+            for item in selected_items:
+                self.tree.delete(item)
+                job_to_remove = self.job_rows.pop(item, {}).get("job")
                 if job_to_remove:
                     self.jobs.remove(job_to_remove)
             self._update_job_selector_combobox()
@@ -2244,32 +1218,85 @@ class MainWindow:
 
     def _on_inspector_selection_change(self, event):
         """Appelée quand la sélection change dans l'inspecteur"""
+        self.logger.info("🔍 INSPECTEUR: Changement de sélection détecté")
         selected_items = self.inspector_tree.selection()
+        self.logger.info(f"📋 INSPECTEUR: Items sélectionnés: {selected_items}")
+        
         if not selected_items:
+            self.logger.info("❌ INSPECTEUR: Aucun item sélectionné")
             return
         
         job_id = selected_items[0]
+        self.logger.info(f"🎯 INSPECTEUR: Job ID sélectionné: {job_id}")
+        
         job = next((j for j in self.jobs if j.job_id == job_id), None)
+        self.logger.info(f"🔍 INSPECTEUR: Job trouvé: {job.src_path.name if job else 'Non trouvé'}")
         
         if job:
+            self.logger.info("📊 INSPECTEUR: Affichage des infos du job...")
             self._display_job_info_in_inspector(job)
+        else:
+            self.logger.warning(f"⚠️ INSPECTEUR: Job non trouvé pour ID: {job_id}")
 
     def _display_job_info_in_inspector(self, job: EncodeJob):
+        self.logger.info(f"📊 INSPECTEUR: Affichage des infos pour {job.src_path.name}")
+        
         # Nettoyer l'ancien contenu
         for widget in self.inspector_info_frame.winfo_children():
             widget.destroy()
+        self.logger.info("🧹 INSPECTEUR: Ancien contenu nettoyé")
             
-        # Afficher les nouvelles informations
-        info = job.get_media_info()
+        # Créer un Notebook (onglets)
+        notebook = ttk.Notebook(self.inspector_info_frame)
+        notebook.pack(expand=True, fill='both')
+
+        # --- Onglet Résumé ---
+        summary_frame = ttk.Frame(notebook, padding="5")
+        notebook.add(summary_frame, text='Résumé')
+
+        try:
+            info = job.get_media_info()
+            self.logger.info(f"📋 INSPECTEUR: Infos média récupérées: {info}")
+        except Exception as e:
+            self.logger.error(f"💥 INSPECTEUR: Erreur récupération infos: {e}", exc_info=True)
+            info = None
         
-        row = 0
         if info:
+            row = 0
+            self.logger.info(f"✅ INSPECTEUR: Affichage de {len(info)} propriétés")
             for key, value in info.items():
-                ttk.Label(self.inspector_info_frame, text=f"{key.replace('_', ' ').title()}:", font=("Helvetica", 10, "bold")).grid(row=row, column=0, sticky="w", padx=5, pady=2)
-                ttk.Label(self.inspector_info_frame, text=str(value), wraplength=400).grid(row=row, column=1, sticky="w", padx=5, pady=2)
+                ttk.Label(summary_frame, text=f"{key.replace('_', ' ').title()}:", font=("Helvetica", 10, "bold")).grid(row=row, column=0, sticky="w", padx=5, pady=2)
+                ttk.Label(summary_frame, text=str(value), wraplength=400).grid(row=row, column=1, sticky="w", padx=5, pady=2)
                 row += 1
+            summary_frame.columnconfigure(1, weight=1)
         else:
-            ttk.Label(self.inspector_info_frame, text="Informations média non disponibles.").grid(row=0, column=0, columnspan=2, sticky="w", padx=5, pady=2)
+            self.logger.warning("⚠️ INSPECTEUR: Aucune info média disponible")
+            ttk.Label(summary_frame, text="Informations média non disponibles.").grid(row=0, column=0, columnspan=2, sticky="w", padx=5, pady=2)
+
+        # --- Onglet FFprobe ---
+        ffprobe_frame = ttk.Frame(notebook, padding="5")
+        notebook.add(ffprobe_frame, text='Détails (ffprobe)')
+
+        ffprobe_text = tk.Text(ffprobe_frame, wrap='none', height=10, width=60)
+        ffprobe_v_scroll = ttk.Scrollbar(ffprobe_frame, orient='vertical', command=ffprobe_text.yview)
+        ffprobe_h_scroll = ttk.Scrollbar(ffprobe_frame, orient='horizontal', command=ffprobe_text.xview)
+        ffprobe_text.configure(yscrollcommand=ffprobe_v_scroll.set, xscrollcommand=ffprobe_h_scroll.set)
+
+        ffprobe_v_scroll.pack(side='right', fill='y')
+        ffprobe_h_scroll.pack(side='bottom', fill='x')
+        ffprobe_text.pack(expand=True, fill='both')
+
+        try:
+            ffprobe_data = job.get_raw_ffprobe_info()
+            if ffprobe_data:
+                pretty_json = json.dumps(ffprobe_data, indent=2)
+                ffprobe_text.insert('1.0', pretty_json)
+            else:
+                ffprobe_text.insert('1.0', "Impossible de récupérer les données de ffprobe.")
+        except Exception as e:
+            ffprobe_text.insert('1.0', f"Erreur lors de la récupération des données ffprobe:\n{e}")
+        
+        ffprobe_text.config(state='disabled')
 
     # _load_settings_from_selected_job is now effectively replaced by calling
     # _update_ui_for_media_type_and_settings(job.mode, job.outputs[0], is_global_context=False)
@@ -2293,50 +1320,6 @@ class MainWindow:
         self.bitrate_entry.config(state="disabled" if is_quality_mode else "normal")
         self.multipass_check.config(state="disabled" if is_quality_mode else "normal")
         # Mettre à jour les étiquettes/valeurs liées si nécessaire
-
-    def _update_container_choices(self, for_media_type: Optional[str] = None):
-        """Met à jour la liste des conteneurs compatibles avec le type de média sélectionné."""
-        media_type_to_use = for_media_type if for_media_type is not None else self.global_type_var.get()
-        self.logger.debug(f"Updating container choices for media type: {media_type_to_use}")
-
-        containers: List[str] = []
-        if media_type_to_use == "video":
-            containers = ["mp4", "mkv", "mov", "webm", "avi"]
-        elif media_type_to_use == "audio":
-            containers = ["m4a", "mp3", "opus", "flac", "ogg", "wav", "aac"]
-        elif media_type_to_use == "image":
-            # For images, container often matches codec, but some codecs can go in generic containers too.
-            # FFmpeg often uses the codec name as format for single images e.g. -f image2 or -f webp
-            # This list represents common output formats for image sequences or single images.
-            containers = ["png", "jpg", "webp", "avif", "jxl", "heic", "tiff", "bmp", "gif"]
-
-        current_container_val = self.container_var.get() # Preserve
-        self.container_combo['values'] = containers
-
-        if current_container_val and current_container_val in containers:
-            self.container_var.set(current_container_val)
-        elif containers:
-            # Smart default based on current codec if possible
-            codec = self.global_codec_var.get()
-            smart_default = ""
-            if media_type_to_use == "video":
-                if codec == "h264" or codec == "hevc": smart_default = "mp4"
-                elif codec == "av1" or codec == "vp9": smart_default = "webm"
-                elif codec == "prores": smart_default = "mov"
-            elif media_type_to_use == "audio":
-                if codec == "aac": smart_default = "m4a"
-                elif codec == "opus": smart_default = "opus" # or ogg
-                elif codec == "flac": smart_default = "flac"
-                elif codec == "mp3": smart_default = "mp3"
-            elif media_type_to_use == "image": # Often codec name is the format
-                if codec in containers: smart_default = codec
-
-            if smart_default and smart_default in containers:
-                self.container_var.set(smart_default)
-            else:
-                self.container_var.set(containers[0])
-        else:
-            self.container_var.set("")
 
     def _update_quality_preset_controls(self, encoder: Optional[str] = None):
         """Met à jour la liste des presets d'encodeur disponibles en fonction de l'encodeur choisi."""
@@ -2377,11 +1360,11 @@ class MainWindow:
 
 
     def _update_encoder_choices(self, for_media_type: Optional[str] = None, codec: Optional[str] = None):
-        """Met à jour la liste des encodeurs compatibles avec le codec sélectionné et ajoute les encodeurs matériels distants."""
-        # media_type_to_use = for_media_type if for_media_type is not None else self.global_type_var.get() # Not directly used for encoder logic here but good for logging
+        """Met à jour la liste des encodeurs compatibles avec le codec sélectionné."""
+        media_type_to_use = for_media_type if for_media_type is not None else self.global_type_var.get()
         codec_to_use = codec if codec is not None else self.global_codec_var.get()
-
-        self.logger.debug(f"Updating encoder choices for codec: {codec_to_use}")
+        
+        self.logger.debug(f"Updating encoder choices for media: {media_type_to_use}, codec: {codec_to_use}")
 
         if not codec_to_use:
             self.global_encoder_combo['values'] = []
@@ -2390,7 +1373,6 @@ class MainWindow:
 
         # 1. Encodeurs locaux compatibles
         local_encoders_info = FFmpegHelpers.available_encoders() # Expect list of dicts
-        
         compatible_local = [
             f"{enc['name']} - {enc['description']}"
             for enc in local_encoders_info
@@ -2400,31 +1382,31 @@ class MainWindow:
         # Ajouter des encodeurs par défaut si aucun n'est trouvé pour certains codecs
         if not compatible_local:
             fallback_encoders = {
-                'webp': 'libwebp - WebP encoder',
-                'jpegxl': 'libjxl - JPEG XL encoder', 
-                'heic': 'libx265 - HEIC encoder', # Typically uses HEVC encoders
-                'avif': 'libaom-av1 - AVIF encoder', # Typically uses AV1 encoders
-                'png': 'png - PNG encoder',
-                'jpeg': 'mjpeg - Motion JPEG encoder', # or libjpeg-turbo
-                'h264': 'libx264 - H.264 encoder',
-                'hevc': 'libx265 - H.265/HEVC encoder',
-                'av1': 'libaom-av1 - AV1 encoder', # Added AV1
-                'vp9': 'libvpx-vp9 - VP9 encoder', # Added VP9
+                'webp': ['libwebp - WebP encoder'],
+                'jpegxl': ['libjxl - JPEG XL encoder'],
+                'heic': ['libx265 - HEIC encoder'], # Typically uses HEVC encoders
+                'avif': ['libaom-av1 - AVIF encoder'], # Typically uses AV1 encoders
+                'png': ['png - PNG encoder'],
+                'jpeg': ['mjpeg - Motion JPEG encoder'], # or libjpeg-turbo
+                'h264': ['libx264 - H.264 encoder'],
+                'hevc': ['libx265 - H.265/HEVC encoder'],
+                'av1': ['libaom-av1 - AV1 encoder'], # Added AV1
+                'vp9': ['libvpx-vp9 - VP9 encoder'], # Added VP9
 
                 # Audio codecs - ensure keys match output of FFmpegHelpers.available_codecs()
-                'aac': 'aac - AAC encoder',
-                'mp3': 'libmp3lame - MP3 encoder', # Key is "mp3"
-                'flac': 'flac - FLAC encoder',
-                'opus': 'libopus - Opus encoder',
-                'vorbis': 'libvorbis - Vorbis encoder', # Added Vorbis
-                'pcm_s16le': 'pcm_s16le - PCM S16LE encoder', # For WAV
-                'alac': 'alac - ALAC (Apple Lossless Audio Codec) encoder', # Added ALAC
-                'pcm_alaw': 'pcm_alaw - PCM A-law encoder',
-                'pcm_mulaw': 'pcm_mulaw - PCM mu-law encoder',
+                'aac': ['aac - AAC encoder'],
+                'mp3': ['libmp3lame - MP3 encoder'], # Key is "mp3"
+                'flac': ['flac - FLAC encoder'],
+                'opus': ['libopus - Opus encoder'],
+                'vorbis': ['libvorbis - Vorbis encoder'], # Added Vorbis
+                'pcm_s16le': ['pcm_s16le - PCM S16LE encoder'], # For WAV
+                'alac': ['alac - ALAC (Apple Lossless Audio Codec) encoder'], # Added ALAC
+                'pcm_alaw': ['pcm_alaw - PCM A-law encoder'],
+                'pcm_mulaw': ['pcm_mulaw - PCM mu-law encoder'],
                 # Add more common PCM formats if necessary
             }
             if codec_to_use in fallback_encoders:
-                compatible_local = [fallback_encoders[codec_to_use]]
+                compatible_local = fallback_encoders[codec_to_use]
 
         # 2. Encodeurs matériels distants
         remote_encoders_list: list[str] = [] # Renamed to avoid conflict
@@ -2610,94 +1592,6 @@ class MainWindow:
 
         self.logger.debug(f"UI Update complete. UI Vars: Type={self.global_type_var.get()}, Codec={self.global_codec_var.get()}, Enc={self.global_encoder_var.get()}, Cont={self.container_var.get()}")
 
-        self.logger.debug(f"Updating encoder choices for codec: {codec_to_use}")
-
-        if not codec_to_use:
-            self.global_encoder_combo['values'] = []
-            self.global_encoder_var.set("")
-            return
-
-        # 1. Encodeurs locaux compatibles
-        local_encoders_info = FFmpegHelpers.available_encoders() # Expect list of dicts
-        compatible_local = [
-            f"{enc['name']} - {enc['description']}"
-            for enc in local_encoders_info
-            if enc.get('codec') == codec_to_use # Use .get for safety
-        ]
-        
-        # Ajouter des encodeurs par défaut si aucun n'est trouvé pour certains codecs
-        if not compatible_local:
-            fallback_encoders = {
-                'webp': 'libwebp - WebP encoder',
-                'jpegxl': 'libjxl - JPEG XL encoder',
-                'heic': 'libx265 - HEIC encoder', # Typically uses HEVC encoders
-                'avif': 'libaom-av1 - AVIF encoder', # Typically uses AV1 encoders
-                'png': 'png - PNG encoder',
-                'jpeg': 'mjpeg - Motion JPEG encoder', # or libjpeg-turbo
-                'h264': 'libx264 - H.264 encoder',
-                'hevc': 'libx265 - H.265/HEVC encoder',
-                'av1': 'libaom-av1 - AV1 encoder', # Added AV1
-                'vp9': 'libvpx-vp9 - VP9 encoder', # Added VP9
-
-                # Audio codecs - ensure keys match output of FFmpegHelpers.available_codecs()
-                'aac': 'aac - AAC encoder',
-                'mp3': 'libmp3lame - MP3 encoder', # Key is "mp3"
-                'flac': 'flac - FLAC encoder',
-                'opus': 'libopus - Opus encoder',
-                'vorbis': 'libvorbis - Vorbis encoder', # Added Vorbis
-                'pcm_s16le': 'pcm_s16le - PCM S16LE encoder', # For WAV
-                'alac': 'alac - ALAC (Apple Lossless Audio Codec) encoder', # Added ALAC
-                'pcm_alaw': 'pcm_alaw - PCM A-law encoder',
-                'pcm_mulaw': 'pcm_mulaw - PCM mu-law encoder',
-                # Add more common PCM formats if necessary
-            }
-            if codec_to_use in fallback_encoders:
-                compatible_local = [fallback_encoders[codec_to_use]]
-
-        # 2. Encodeurs matériels distants
-        remote_encoders_list: list[str] = [] # Renamed to avoid conflict
-        if self.distributed_client: # Ensure client exists
-            connected_servers = self.distributed_client.get_connected_servers()
-            for server in connected_servers:
-                # Ensure server status and capabilities are accessible
-                server_status_val = getattr(server.status, 'value', None) if hasattr(server, 'status') else None
-                if server_status_val == 'online' and hasattr(server, 'capabilities') and server.capabilities:
-
-                    all_hw_encoders_on_server: List[str] = []
-                    if hasattr(server.capabilities, 'hardware_encoders') and server.capabilities.hardware_encoders:
-                        if isinstance(server.capabilities.hardware_encoders, dict):
-                            # e.g. {"nvidia": ["h264_nvenc"], "intel": ["h264_qsv"]}
-                            for enc_list_per_type in server.capabilities.hardware_encoders.values():
-                                if isinstance(enc_list_per_type, list):
-                                    all_hw_encoders_on_server.extend(enc_list_per_type)
-                        elif isinstance(server.capabilities.hardware_encoders, list):
-                            # e.g. ["h264_nvenc", "hevc_nvenc"]
-                            all_hw_encoders_on_server.extend(server.capabilities.hardware_encoders)
-
-                    for hw_enc_name in all_hw_encoders_on_server:
-                        # Basic compatibility check - this might need to be more robust,
-                        # potentially checking against FFmpeg's known codec <-> encoder mappings.
-                        # For now, simple string matching.
-                        if codec_to_use in hw_enc_name or \
-                           (codec_to_use == 'hevc' and ('h265' in hw_enc_name or 'hevc' in hw_enc_name)) or \
-                           (codec_to_use == 'av1' and 'av1' in hw_enc_name) or \
-                           (codec_to_use == 'h264' and ('h264' in hw_enc_name or 'avc' in hw_enc_name)):
-                            remote_encoders_list.append(f"{server.name}: {hw_enc_name}")
-
-        all_encoders = compatible_local + list(set(remote_encoders_list)) # list(set()) to remove duplicates
-
-        current_encoder_val = self.global_encoder_var.get() # Preserve current if valid
-        self.global_encoder_combo['values'] = all_encoders
-
-        if current_encoder_val and current_encoder_val in all_encoders:
-            self.global_encoder_var.set(current_encoder_val)
-        elif all_encoders:
-            self.global_encoder_var.set(all_encoders[0])
-        else:
-            self.global_encoder_var.set("")
-
-        # Orchestrating method will call subsequent updates like _update_container_choices and _update_quality_preset_controls.
-
     def _update_quality_controls_ui(self, media_type: Optional[str] = None, encoder: Optional[str] = None, codec: Optional[str] = None, output_config: Optional[OutputConfig] = None):
         """Met à jour les contrôles de qualité en fonction du type de média, de l'encodeur sélectionné et de la configuration existante."""
         media_type_to_use = media_type if media_type is not None else self.global_type_var.get()
@@ -2763,7 +1657,7 @@ class MainWindow:
                 self.bitrate_entry.config(state="disabled")
                 if not output_config: self.video_mode_var.set("quality") # Default to compression for FLAC
             elif any(c in encoder_to_use for c in ['aac', 'libopus', 'libvorbis', 'libmp3lame']):
-                self.video_mode_radio_quality.config(text="Qualité VBR (varies)", state="normal")
+                self.video_mode_radio_quality.config(text="Qualité VBR (varie)", state="normal")
                 # VBR quality scale depends on codec, e.g. LAME -V (0-9), Vorbis -q (0-10), fdk_aac -vbr (1-5)
             else: # e.g., PCM like 'wav'
                 self.video_mode_radio_quality.config(text="Qualité (N/A)", state="disabled")
@@ -2782,9 +1676,15 @@ class MainWindow:
             elif 'jpeg' in encoder_to_use or 'mjpeg' in encoder_to_use : q_text = "JPEG Qualité (1-100)"
             elif 'jpegxl' in encoder_to_use or 'jxl' in encoder_to_use: q_text = "JXL Distance (0-15)"
             elif 'heic' in encoder_to_use: q_text = "HEIC Qualité (CRF 0-51)"
-            elif 'png' in encoder_to_use: q_text = "PNG Compression (0-100)"
+            elif 'png' in encoder_to_use: q_text = "PNG Compression (0-9)"
             self.video_mode_radio_quality.config(text=q_text)
         
+        # TODO: Implémenter l'option lossless pour les images
+        # if any(x in encoder_to_use for x in ['webp', 'png', 'jpegxl', 'avif']):
+        #     self.lossless_check.grid()
+        # else:
+        #     self.lossless_check.grid_remove()
+
         # This call will enable/disable the actual entry fields based on the radio button selection
         self._on_video_mode_change()
 
@@ -2891,3 +1791,512 @@ class MainWindow:
             
         except Exception as e:
             self.logger.error(f"Erreur lors de la synchronisation des paramètres globaux via _on_ui_setting_changed: {e}", exc_info=True)
+
+    def _update_codec_choices(self, for_media_type: Optional[str] = None):
+        media_type = for_media_type or self.state.global_media_type
+        self.logger.debug(f"Mise à jour des codecs pour le type de média: {media_type}")
+        
+        # Ajout de logs pour diagnostiquer le problème des images
+        self.logger.info(f"🔍 DIAGNOSTIC CODECS: Recherche codecs pour {media_type}")
+        
+        # Utiliser la méthode corrigée qui charge depuis codecs.json
+        codecs = self.ffmpeg_helpers.get_available_codecs(media_type)
+        self.logger.info(f"📋 DIAGNOSTIC CODECS: Données codecs brutes pour {media_type}: {codecs}")
+        self.logger.debug(f"Données codecs brutes pour {media_type}: {codecs}")
+        
+        self.codec_name_map = {c['name']: c['codec'] for c in codecs}
+        codec_display_names = list(self.codec_name_map.keys())
+        
+        self.logger.info(f"🗺️ DIAGNOSTIC CODECS: Codec name map créé: {self.codec_name_map}")
+        self.logger.info(f"📝 DIAGNOSTIC CODECS: Noms d'affichage des codecs: {codec_display_names}")
+        self.logger.debug(f"Codec name map créé: {self.codec_name_map}")
+        self.logger.debug(f"Noms d'affichage des codecs: {codec_display_names}")
+        
+        current_codec_display_name = self.global_codec_var.get()
+        
+        self.global_codec_combo['values'] = codec_display_names
+        if codec_display_names:
+            if current_codec_display_name not in codec_display_names:
+                self.global_codec_var.set(codec_display_names[0])
+                self.logger.info(f"✅ DIAGNOSTIC CODECS: Codec par défaut sélectionné: {codec_display_names[0]}")
+                self.logger.debug(f"Codec par défaut sélectionné: {codec_display_names[0]}")
+            else:
+                self.global_codec_var.set(current_codec_display_name)
+        else:
+            self.global_codec_var.set("")
+            self.logger.warning(f"❌ DIAGNOSTIC CODECS: Aucun codec trouvé pour {media_type}")
+            self.logger.warning(f"Aucun codec trouvé pour {media_type}")
+        
+        self.logger.info(f"🏁 DIAGNOSTIC CODECS: Terminé pour {media_type}. {len(codec_display_names)} codecs chargés.")
+
+    def _update_preset_list(self):
+        #je dois aussi mettre à jour le menu des préréglages
+        preset_menu = self.menu_bar.winfo_children()[2] # Attention, c'est fragile
+        preset_menu.delete(2, tk.END) # Supprimer les anciens préréglages
+        
+        presets = self.state.get_preset_names()
+        self.preset_combo['values'] = presets
+        # self.watch_preset_combo['values'] = presets  # Commenté car non défini
+        
+        for preset_name in presets:
+            preset_menu.add_command(label=preset_name, command=lambda name=preset_name: self._load_preset_by_name(name))
+ 
+
+
+
+    def _new_update_codec_choices(self, for_media_type: Optional[str] = None):
+        media_type = for_media_type or self.state.global_media_type
+        self.logger.debug(f"Mise à jour des codecs pour le type de média: {media_type}")
+        
+        codecs = self.ffmpeg_helpers.get_available_codecs(media_type)
+        self.codec_name_map = {c['name']: c['codec'] for c in codecs}
+        codec_display_names = list(self.codec_name_map.keys())
+        
+        current_codec_display_name = self.global_codec_var.get()
+        
+        self.global_codec_combo['values'] = codec_display_names
+        if codec_display_names:
+            if current_codec_display_name not in codec_display_names:
+                self.global_codec_var.set(codec_display_names[0])
+            else:
+                self.global_codec_var.set(current_codec_display_name)
+        else:
+            self.global_codec_var.set("")
+
+    def _new_update_container_choices(self, for_media_type: Optional[str] = None):
+        media_type = for_media_type or self.state.global_media_type
+        codec_display_name = self.global_codec_var.get()
+        
+        if not codec_display_name:
+            self.container_combo['values'] = []
+            self.container_var.set("")
+            return
+
+        codec_name = self.codec_name_map.get(codec_display_name)
+
+        if not codec_name:
+            self.container_combo['values'] = []
+            self.container_var.set("")
+            return
+        
+        extensions = self.ffmpeg_helpers.get_extensions_for_codec(media_type, codec_name)
+        
+        self.container_combo['values'] = extensions
+        if extensions:
+            current_container = self.container_var.get()
+            if current_container not in extensions:
+                self.container_var.set(extensions[0])
+        else:
+            self.container_var.set("")
+
+    def _new_update_encoder_choices(self, for_media_type: Optional[str] = None, codec: Optional[str] = None):
+        media_type = for_media_type or self.state.global_media_type
+        codec_display_name = codec or self.global_codec_var.get()
+        
+        self.logger.debug(f"Mise à jour des encodeurs pour {media_type} / {codec_display_name}")
+
+        if not codec_display_name:
+            self.global_encoder_combo['values'] = []
+            self.global_encoder_var.set("")
+            self.logger.debug("Pas de codec sélectionné, liste d'encodeurs vide")
+            return
+
+        codec_name = self.codec_name_map.get(codec_display_name)
+        self.logger.debug(f"Tentative de mapping: '{codec_display_name}' -> '{codec_name}'")
+        self.logger.debug(f"Codec name map disponible: {list(self.codec_name_map.keys())}")
+
+        if not codec_name:
+            # Essayer de trouver le codec par correspondance directe
+            for display_name, internal_name in self.codec_name_map.items():
+                if display_name.lower() == codec_display_name.lower():
+                    codec_name = internal_name
+                    self.logger.debug(f"Mapping trouvé par correspondance: {display_name} -> {codec_name}")
+                    break
+        
+        if not codec_name:
+            self.global_encoder_combo['values'] = []
+            self.global_encoder_var.set("")
+            self.logger.warning(f"Impossible de mapper le codec '{codec_display_name}'. Codecs disponibles: {list(self.codec_name_map.keys())}")
+            return
+
+        encoders = self.ffmpeg_helpers.get_available_encoders_for_codec(media_type, codec_name)
+        self.logger.debug(f"Encodeurs trouvés: {encoders}")
+        
+        self.global_encoder_combo['values'] = encoders
+        
+        current_encoder = self.global_encoder_var.get()
+        
+        if encoders:
+            if current_encoder not in encoders:
+                # Sélectionner le premier encodeur disponible
+                self.global_encoder_var.set(encoders[0])
+                self.logger.debug(f"Encodeur par défaut sélectionné: {encoders[0]}")
+            else:
+                 self.global_encoder_var.set(current_encoder)
+                 self.logger.debug(f"Encodeur actuel conservé: {current_encoder}")
+        else:
+            self.global_encoder_var.set("")
+            self.logger.warning(f"Aucun encodeur trouvé pour {codec_name} ({media_type})")
+
+    def _apply_ui_settings_to_job(self, job):
+        """Applique les paramètres de l'UI à un job"""
+        self.logger.info(f"🔧 APPLY: Application des paramètres UI au job: {job.src_path.name}")
+        
+        if not job.outputs:
+            # Créer un OutputConfig par défaut si aucun n'existe
+            from core.encode_job import OutputConfig
+            output_name = f"{job.src_path.stem} - Default"
+            dst_path = job.src_path.with_suffix(f".{self.container_var.get()}")
+            output_cfg = OutputConfig(output_name, dst_path, job.mode)
+            job.outputs.append(output_cfg)
+            self.logger.info(f"📦 APPLY: OutputConfig créé pour {job.src_path.name}")
+        
+        # Appliquer les paramètres UI au premier output
+        output_cfg = job.outputs[0]
+        self.logger.info(f"🎯 APPLY: Configuration de l'output: {output_cfg}")
+        
+        # Mettre à jour le mode de job si nécessaire
+        old_mode = job.mode
+        job.mode = self.global_type_var.get()
+        output_cfg.mode = job.mode
+        self.logger.info(f"📝 APPLY: Mode changé de {old_mode} vers {job.mode}")
+        
+        # Encodeur et codec
+        encoder_display = self.global_encoder_var.get()
+        encoder_name = self._get_encoder_name_from_display(encoder_display)
+        output_cfg.encoder = encoder_name
+        self.logger.info(f"🔧 APPLY: Encodeur: {encoder_display} -> {encoder_name}")
+        
+        codec_display_name = self.global_codec_var.get()
+        codec_name = self.codec_name_map.get(codec_display_name, "")
+        output_cfg.codec = codec_name
+        self.logger.info(f"🎬 APPLY: Codec: {codec_display_name} -> {codec_name}")
+        
+        # Container et chemin de destination
+        container = self.container_var.get()
+        output_cfg.container = container
+        self.logger.info(f"📦 APPLY: Container: {container}")
+        
+        if container:
+            # Mettre à jour le chemin de destination avec la nouvelle extension
+            if output_cfg.dst_path:
+                old_path = output_cfg.dst_path
+                output_cfg.dst_path = output_cfg.dst_path.with_suffix(f".{container}")
+                self.logger.info(f"📁 APPLY: Chemin destination: {old_path} -> {output_cfg.dst_path}")
+            else:
+                # Si le chemin de destination n'existait pas, en créer un
+                output_folder = self.output_folder.get()
+                if output_folder and not output_folder.startswith("No"):
+                    output_cfg.dst_path = Path(output_folder) / job.src_path.with_suffix(f".{container}").name
+                else: # Fallback au dossier source
+                    output_cfg.dst_path = job.src_path.with_suffix(f".{container}")
+                self.logger.info(f"📁 APPLY: Nouveau chemin destination créé: {output_cfg.dst_path}")
+
+        # Paramètres de qualité
+        output_cfg.video_mode = self.video_mode_var.get()
+        output_cfg.quality = self.quality_var.get()
+        output_cfg.bitrate = self.bitrate_var.get()
+        output_cfg.multipass = self.multipass_var.get()
+        output_cfg.preset = self.preset_var.get()
+        
+        # Paramètres personnalisés
+        output_cfg.custom_flags = self.custom_flags_var.get()
+
+        self.logger.info(f"✅ APPLY: Paramètres appliqués au job {job.src_path.name}: "
+                         f"Codec={output_cfg.codec}, Encoder={output_cfg.encoder}, Container={output_cfg.container}")
+        self.controller.state.notify_observers("jobs_changed")
+
+    def _update_container_choices(self, for_media_type: Optional[str] = None):
+        """Met à jour les choix de conteneurs disponibles selon le type de média et le codec sélectionné."""
+        media_type = for_media_type or self.state.global_media_type
+        codec_display_name = self.global_codec_var.get()
+        
+        if not codec_display_name:
+            self.container_combo['values'] = []
+            self.container_var.set("")
+            return
+
+        codec_name = self.codec_name_map.get(codec_display_name)
+
+        if not codec_name:
+            self.container_combo['values'] = []
+            self.container_var.set("")
+            return
+        
+        extensions = self.ffmpeg_helpers.get_extensions_for_codec(media_type, codec_name)
+        
+        self.container_combo['values'] = extensions
+        if extensions:
+            current_container = self.container_var.get()
+            if current_container not in extensions:
+                self.container_var.set(extensions[0])
+        else:
+            self.container_var.set("")
+
+    def _on_tonemap_change(self, event=None):
+        """Appelé quand les paramètres de tone mapping changent."""
+        # Méthode stub pour éviter les erreurs - à implémenter plus tard
+        pass
+
+    def _on_subtitle_mode_change(self, event=None):
+        """Appelé quand le mode de sous-titres change."""
+        # Méthode stub pour éviter les erreurs - à implémenter plus tard
+        pass
+
+    def _get_encoder_name_from_display(self, display_name: str) -> str:
+        """Extrait le nom court de l'encodeur à partir du nom d'affichage."""
+        if not display_name:
+            return ""
+        
+        # Extraire le nom court de l'encodeur avant le premier " - "
+        if " - " in display_name:
+            return display_name.split(" - ")[0]
+        
+        return display_name
+
+    def _load_preset_by_name(self, preset_name: str):
+        """Charge un preset par son nom."""
+        if self.controller.load_preset(preset_name):
+            self.logger.info(f"Preset '{preset_name}' chargé avec succès")
+        else:
+            self.logger.warning(f"Échec du chargement du preset '{preset_name}'")
+
+    def _on_double_click(self, event):
+        """Appelé lors d'un double-clic sur un élément de la queue."""
+        selected_items = self.tree.selection()
+        if selected_items:
+            self._edit_selected_job()
+
+    def _on_right_click(self, event):
+        """Appelé lors d'un clic droit sur un élément de la queue."""
+        item = self.tree.identify_row(event.y)
+        if item:
+            self.tree.selection_set(item)
+            self.context_menu.post(event.x_root, event.y_root)
+
+    def _on_queue_selection_change(self, event):
+        """Appelé quand la sélection change dans la queue."""
+        selected_items = self.tree.selection()
+        self._update_buttons_state()
+
+    def _start_encoding(self):
+        """Démarre l'encodage des jobs en attente."""
+        self.run_async_func(self.controller.start_encoding())
+
+    def _pause_all(self):
+        """Met en pause tous les jobs en cours."""
+        # Méthode stub - à implémenter
+        pass
+
+    def _resume_all(self):
+        """Reprend tous les jobs en pause."""
+        # Méthode stub - à implémenter
+        pass
+
+    def _reassign_selected_jobs(self):
+        """Réassigne les jobs sélectionnés."""
+        # Méthode stub - à implémenter
+        pass
+
+    def _on_job_selected_for_settings_change(self, event=None):
+        """Appelé quand un job est sélectionné dans le combobox des paramètres."""
+        job_id = self.selected_job_for_settings_var.get()
+        if job_id:
+            job = self.state.get_job_by_id(job_id)
+            if job and job.outputs:
+                self._update_ui_for_media_type_and_settings(job.mode, job.outputs[0], is_global_context=False)
+
+    def _apply_ui_settings_to_selected_job_via_combobox(self):
+        """Applique les paramètres UI au job sélectionné via le combobox."""
+        job_id = self.selected_job_for_settings_var.get()
+        if job_id:
+            job = self.state.get_job_by_id(job_id)
+            if job:
+                self._apply_ui_settings_to_job(job)
+
+    def _apply_ui_settings_to_last_import_batch(self):
+        """Applique les paramètres UI au dernier lot de fichiers importés."""
+        self.logger.info("🔄 BATCH: Début d'application des paramètres au dernier import")
+        self.logger.info(f"📋 BATCH: IDs du dernier import: {self.last_import_job_ids}")
+        
+        if not self.last_import_job_ids:
+            self.logger.warning("⚠️ BATCH: Aucun ID de dernier import trouvé!")
+            return
+        
+        applied_count = 0
+        for job_id in self.last_import_job_ids:
+            self.logger.info(f"🔍 BATCH: Recherche job avec ID: {job_id}")
+            job = self.state.get_job_by_id(job_id)
+            if job:
+                self.logger.info(f"✅ BATCH: Job trouvé: {job.src_path.name}")
+                self._apply_ui_settings_to_job(job)
+                applied_count += 1
+            else:
+                self.logger.warning(f"❌ BATCH: Job non trouvé pour ID: {job_id}")
+        
+        self.logger.info(f"🏁 BATCH: Paramètres appliqués à {applied_count}/{len(self.last_import_job_ids)} jobs")
+
+    def _on_frame_configure(self, event):
+        """Appelé quand la taille du frame change."""
+        self.settings_canvas.configure(scrollregion=self.settings_canvas.bbox("all"))
+
+    def _on_canvas_configure(self, event):
+        """Appelé quand la taille du canvas change."""
+        canvas_width = event.width
+        self.settings_canvas.itemconfig(self._canvas_window, width=canvas_width)
+
+    def _setup_drag_drop(self):
+        """Configure le drag & drop si disponible."""
+        if self.dnd_available:
+            try:
+                self.root.drop_target_register(DND_FILES)
+                self.root.dnd_bind('<<Drop>>', self._on_drop)
+            except Exception as e:
+                self.logger.warning(f"Impossible de configurer le drag & drop: {e}")
+
+    def _on_drop(self, event):
+        """Appelé quand des fichiers sont déposés dans l'application."""
+        self.logger.info("🎯 Événement drag & drop détecté")
+        try:
+            self.logger.info(f"📦 Données reçues: {event.data}")
+            files = self.root.tk.splitlist(event.data)
+            self.logger.info(f"📄 Fichiers extraits: {files}")
+            
+            file_paths = [Path(f) for f in files if Path(f).exists()]
+            self.logger.info(f"🔗 Chemins valides: {file_paths}")
+            
+            if file_paths:
+                self.logger.info("🚀 Appel du contrôleur pour ajouter les fichiers droppés...")
+                added_jobs = self.controller.add_files_to_queue(file_paths)
+                self.logger.info(f"✅ Jobs créés: {len(added_jobs) if added_jobs else 0}")
+                
+                if added_jobs:
+                    self.last_import_job_ids = [job.job_id for job in added_jobs]
+                    self.logger.info(f"💾 IDs des derniers jobs: {self.last_import_job_ids}")
+                else:
+                    self.logger.warning("⚠️ Aucun job créé malgré des fichiers valides")
+            else:
+                self.logger.warning("❌ Aucun fichier valide trouvé dans le drop")
+        except Exception as e:
+            self.logger.error(f"💥 Erreur lors du drag & drop: {e}", exc_info=True)
+
+    def _update_job_selector_combobox(self):
+        """Met à jour le combobox de sélection des jobs."""
+        job_names = []
+        for job in self.state.jobs:
+            job_names.append(f"{job.job_id[:8]} - {job.src_path.name}")
+        
+        self.job_selector_combobox['values'] = job_names
+        
+        # Si un job était sélectionné et qu'il existe encore, le garder sélectionné
+        current_selection = self.selected_job_for_settings_var.get()
+        if current_selection and current_selection in job_names:
+            self.selected_job_for_settings_var.set(current_selection)
+        elif job_names:
+            self.selected_job_for_settings_var.set(job_names[0])
+        else:
+            self.selected_job_for_settings_var.set("")
+
+    def _update_inspector_file_list(self):
+        """Met à jour la liste des fichiers dans l'inspecteur."""
+        self.logger.info("🔄 INSPECTEUR: Mise à jour de la liste des fichiers")
+        
+        # Vider la liste actuelle
+        current_items = self.inspector_tree.get_children()
+        self.logger.info(f"🗑️ INSPECTEUR: Suppression de {len(current_items)} items existants")
+        for item in current_items:
+            self.inspector_tree.delete(item)
+        
+        # Ajouter tous les jobs à la liste
+        self.logger.info(f"📁 INSPECTEUR: Ajout de {len(self.state.jobs)} jobs")
+        for job in self.state.jobs:
+            self.inspector_tree.insert("", "end", iid=job.job_id, values=(job.src_path.name,))
+            self.logger.debug(f"➕ INSPECTEUR: Job ajouté: {job.job_id} - {job.src_path.name}")
+        
+        self.logger.info("✅ INSPECTEUR: Liste mise à jour")
+
+    def _update_resolution_choices(self):
+        """Met à jour les choix de résolution disponibles selon le type de média."""
+        media_type = self.state.global_media_type
+        
+        if media_type == "video":
+            # Résolutions communes pour vidéo
+            resolutions = [
+                "Original", "4K (3840x2160)", "1440p (2560x1440)", 
+                "1080p (1920x1080)", "720p (1280x720)", "480p (854x480)",
+                "360p (640x360)", "240p (426x240)"
+            ]
+        elif media_type == "image":
+            # Options pour images
+            resolutions = [
+                "Original", "4K (3840x2160)", "2K (2048x1080)",
+                "1080p (1920x1080)", "720p (1280x720)", "Personnalisé"
+            ]
+        else:
+            # Pour audio ou autres
+            resolutions = ["Original"]
+        
+        if hasattr(self, 'resolution_combo'):
+            self.resolution_combo['values'] = resolutions
+            if not self.resolution_var.get() or self.resolution_var.get() not in resolutions:
+                self.resolution_var.set("Original")
+
+    def _remove_selected_jobs(self):
+        """Supprime les jobs sélectionnés de la queue."""
+        selected_items = self.tree.selection()
+        if not selected_items:
+            self.logger.warning("Aucun job sélectionné pour la suppression")
+            return
+        
+        # Demander confirmation
+        job_count = len(selected_items)
+        if job_count == 1:
+            message = "Êtes-vous sûr de vouloir supprimer ce job ?"
+        else:
+            message = f"Êtes-vous sûr de vouloir supprimer ces {job_count} jobs ?"
+        
+        result = messagebox.askyesno("Confirmation", message)
+        if not result:
+            return
+        
+        # Récupérer les IDs des jobs à supprimer
+        job_ids = []
+        for item in selected_items:
+            job_id = self.tree.item(item)['values'][0]  # L'ID est dans la première colonne
+            job_ids.append(job_id)
+        
+        # Supprimer les jobs via le contrôleur
+        self.controller.remove_jobs(job_ids)
+        self.logger.info(f"{job_count} job(s) supprimé(s)")
+
+    #this part do that
+    # Met à jour la zone de défilement et affiche/masque la scrollbar selon le contenu
+    def _update_scroll_state(self):
+        # Ajuster le scrollregion pour englober tout le contenu
+        self.settings_canvas.configure(scrollregion=self.settings_canvas.bbox("all"))
+
+        # Calculer la hauteur du contenu et celle du canvas
+        bbox = self.settings_canvas.bbox("all")
+        content_height = bbox[3] if bbox else 0
+        canvas_height = self.settings_canvas.winfo_height()
+
+        # Afficher la scrollbar uniquement si le contenu déborde
+        if content_height > canvas_height:
+            # Pack si pas déjà affichée
+            if not self._scrollbar.winfo_ismapped():
+                self._scrollbar.pack(side="right", fill="y")
+        else:
+            # Masquer pour économiser de l'espace
+            if self._scrollbar.winfo_ismapped():
+                self._scrollbar.pack_forget()
+
+        # Planifier une mise à jour périodique pour garder l'UX fluide
+        self.root.after(250, self._update_scroll_state)
+
+    #this part do that
+    # Met à jour l'affichage/état des serveurs dans l'interface
+    def update_server_status(self, servers):
+        """Stub d'affichage de statut serveur pour éviter les erreurs fatales."""
+        # Pour l'instant on se contente de journaliser ; implémentation détaillée à venir
+        server_names = [getattr(s, 'name', 'srv') for s in servers]
+        self.logger.debug(f"Serveurs connectés: {server_names}")

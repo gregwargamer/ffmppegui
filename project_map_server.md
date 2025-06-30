@@ -93,6 +93,8 @@ ffmpeg-server/
   - Test support résolutions/formats
   - Génération profil capacités
 
+This file now simply re-exports `HardwareDetector` and `detect_capabilities` from `common.hardware_detector`. All detection logic is shared between GUI and server.
+
 ## Fonctionnalités clés
 
 ### Détection automatique capacités

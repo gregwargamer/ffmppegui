@@ -58,11 +58,14 @@ def setup_logging(settings):
 
 class AsyncTkApp:
     """Classe de base pour gérer l'intégration d'une boucle asyncio avec Tkinter."""
-    def __init__(self, root_widget):
+    def __init__(self, root_widget, loop_interval_ms: int = 50):
         self.root = root_widget
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
         self.is_running = True
+        self._loop_interval_ms = loop_interval_ms
+        #identifiant de la tâche Tkinter after pour annulation propre
+        self._after_id = None
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def run_forever(self):
@@ -78,7 +81,9 @@ class AsyncTkApp:
         self.loop.stop()
         self.loop.run_forever()
         self.root.update()
-        self.root.after(50, self._update_loop)
+        #replanifie uniquement si l'application tourne toujours
+        if self.is_running:
+            self._after_id = self.root.after(self._loop_interval_ms, self._update_loop)
 
     async def _shutdown_async_tasks(self):
         """Annule et attend la terminaison des tâches asyncio en cours."""
@@ -96,10 +101,34 @@ class AsyncTkApp:
         self.is_running = False
         
         try:
+            #annule l'after Tkinter principal
+            if self._after_id is not None:
+                try:
+                    self.root.after_cancel(self._after_id)
+                except tk.TclError:
+                    pass
+
+            #annule tous les callbacks after encore enregistrés (widgets internes)
+            try:
+                after_list = self.root.tk.call('after', 'info')  # renvoie une chaîne d'IDs séparés par des espaces
+                for aid in str(after_list).split():
+                    if aid and aid != str(self._after_id):  # _after_id déjà annulé
+                        try:
+                            self.root.after_cancel(aid)
+                        except tk.TclError:
+                            pass
+            except tk.TclError:
+                # aucune info after disponible
+                pass
+
             self.loop.run_until_complete(self._shutdown_async_tasks())
         finally:
             self.loop.close()
-            self.root.destroy()
+            try:
+                self.root.destroy()
+            except tk.TclError:
+                #la fenêtre est peut-être déjà détruite
+                pass
 
 
 def main():
@@ -118,7 +147,11 @@ def main():
         root = tk.Tk()
         dnd_available = False
 
-    app = AsyncTkApp(root)
+    # Charger les settings pour les composants (format dataclass)
+    settings = load_settings()
+
+    # Création de l'application Tk/asyncio avec intervalle configurable
+    app = AsyncTkApp(root, loop_interval_ms=settings.ui.tk_loop_interval_ms)
 
     try:
         # Charger les settings pour le logging (format dictionnaire)
@@ -126,19 +159,21 @@ def main():
         logging_settings = settings_manager.get_settings()
         setup_logging(logging_settings)
 
-        # Charger les settings pour les composants (format dataclass)
-        settings = load_settings()
-
         # Initialisation de la nouvelle architecture State/Controller
         from core.app_state import AppState
         from core.app_controller import AppController
         
         app_state = AppState(settings)
         
-        # Initialisation des composants principaux
-        distributed_client = DistributedClient(settings)
+        # Initialisation du client distribué
+        # Le client est responsable de la communication avec les serveurs d'encodage
+        logging.info("Initialisation du client distribué...")
+        distributed_client = DistributedClient(settings, app_state)
+
+        # Initialisation du planificateur de jobs
+        # Le scheduler décide à quel serveur envoyer quel job
         server_discovery = ServerDiscovery(distributed_client, settings)
-        capability_matcher = CapabilityMatcher()
+        capability_matcher = CapabilityMatcher(settings.distributed.matcher_weights)
         job_scheduler = JobScheduler(distributed_client, capability_matcher)
         
         # Création du contrôleur principal
@@ -149,12 +184,32 @@ def main():
             # Le paramètre loop est ignoré car on utilise toujours app.loop
             return app.loop.create_task(coro)
 
+        #cette partie gère l'enregistrement avant fermeture
+        def _on_app_close():
+            #sauvegarde explicite de la file d'attente restante
+            try:
+                app_state.save_queue()
+            except Exception as e:
+                logging.error(f"Erreur lors de la sauvegarde finale de la file d'attente: {e}")
+            #appel de la fermeture standard
+            app.on_close()
+        #enregistrement du nouveau gestionnaire sur l'événement fenêtre fermée
+        root.protocol("WM_DELETE_WINDOW", _on_app_close)
+        
         # Création de la fenêtre principale avec la nouvelle architecture
         main_window = MainWindow(root, app_state, app_controller, app.loop, run_async_func, dnd_available=dnd_available)
         
         # Lancer les tâches de fond
         app.loop.create_task(server_discovery.start_discovery())
         app.loop.create_task(job_scheduler.start_scheduler())
+        
+        #cette autre partie relance automatiquement les jobs en attente
+        if any(job.status in ["pending", "paused", "queued", "assigned"] for job in app_state.jobs):
+            async def _auto_resume_pending():
+                #courte pause pour s'assurer que le scheduler est opérationnel
+                await asyncio.sleep(0.1)
+                await app_controller.start_encoding()
+            app.loop.create_task(_auto_resume_pending())
         
         # Démarrer l'application
         app.run_forever()

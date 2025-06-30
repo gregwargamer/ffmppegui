@@ -1,138 +1,241 @@
 import subprocess
-import sys
-from tkinter import messagebox
 import re
+from tkinter import messagebox
+from typing import List, Dict, Any, Optional
+import os
+import json
+import logging
+import threading
+
+#verrou global pour sécuriser l'accès au cache entre threads
+_cache_lock = threading.Lock()
+
+#cache des encodeurs ffmpeg
+_ffmpeg_encoders_cache: Optional[List[str]] = None
+
+# Cache pour les informations détaillées des encodeurs disponibles
+_available_encoders_info_cache: Optional[List[Dict[str, str]]] = None
+
+# Cache pour la liste des codecs disponibles classée par type
+_available_codecs_cache: Optional[Dict[str, List[str]]] = None
+
+def get_ffmpeg_encoders() -> List[str]:
+    """Récupère la liste des noms d'encodeurs depuis la sortie de 'ffmpeg -encoders'."""
+    global _ffmpeg_encoders_cache
+    #accès thread-safe au cache
+    with _cache_lock:
+        if _ffmpeg_encoders_cache is not None:
+            return _ffmpeg_encoders_cache
+
+    # Ajout de logs pour diagnostiquer
+    logger = logging.getLogger(__name__)
+    logger.info("🔍 DIAGNOSTIC: Interrogation de FFmpeg pour les encodeurs...")
+
+    try:
+        result = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True, check=True)
+        encoders = []
+        encoder_line_re = re.compile(r"^\s[VAS][.FSXBD]{5}\s+(\w+)")
+        
+        # Compter les lignes pour diagnostic
+        total_lines = len(result.stdout.splitlines())
+        logger.info(f"📄 DIAGNOSTIC: {total_lines} lignes dans la sortie FFmpeg")
+        
+        for line in result.stdout.splitlines():
+            match = encoder_line_re.match(line)
+            if match:
+                encoder_name = match.group(1)
+                encoders.append(encoder_name)
+                # Log spécifiquement les encodeurs d'images
+                if any(img_enc in encoder_name for img_enc in ['png', 'jpeg', 'mjpeg', 'webp', 'avif']):
+                    logger.info(f"🖼️ DIAGNOSTIC: Encodeur image détecté: {encoder_name}")
+        
+        logger.info(f"✅ DIAGNOSTIC: {len(encoders)} encodeurs FFmpeg détectés au total")
+        logger.info(f"🖼️ DIAGNOSTIC: Encodeurs d'images trouvés: {[e for e in encoders if any(img in e for img in ['png', 'jpeg', 'mjpeg', 'webp', 'avif'])]}")
+        
+        with _cache_lock:
+            _ffmpeg_encoders_cache = encoders
+        return encoders
+    except (FileNotFoundError, subprocess.CalledProcessError) as e:
+        logger.error(f"❌ DIAGNOSTIC: Erreur FFmpeg: {e}")
+        messagebox.showerror("Erreur FFmpeg", f"Impossible de lister les encodeurs: {e}\nAssurez-vous que ffmpeg est dans le PATH.")
+        with _cache_lock:
+            _ffmpeg_encoders_cache = []
+        return []
 
 class FFmpegHelpers:
-    """Utility functions to query ffmpeg."""
+    """Fonctions utilitaires pour interagir avec les données des codecs."""
 
-    _encoders_cache = None
-    _codecs_cache = None
-    _hw_encoders_cache = None
+    def __init__(self, codec_info: Dict[str, Any]):
+        self.logger = logging.getLogger(__name__)
+        self.codec_info = codec_info
+        self.available_ffmpeg_encoders = get_ffmpeg_encoders()
 
-    @classmethod
-    def available_encoders(cls):
-        if cls._encoders_cache is None:
+    def get_available_codecs(self, media_type: str) -> List[Dict[str, Any]]:
+        """Retourne la liste des codecs disponibles pour un type de média."""
+        return self.codec_info.get(media_type, [])
+
+    def get_codec_details(self, media_type: str, codec_name: str) -> Optional[Dict[str, Any]]:
+        """Retourne les détails d'un codec spécifique."""
+        for codec in self.get_available_codecs(media_type):
+            if codec.get("codec") == codec_name:
+                return codec
+        return None
+
+    def get_available_encoders_for_codec(self, media_type: str, codec_name: str) -> List[str]:
+        """
+        Retourne les encodeurs disponibles pour un codec, en filtrant par ceux que ffmpeg supporte.
+        """
+        self.logger.info(f"🔍 DIAGNOSTIC: Recherche encodeurs pour {media_type}/{codec_name}")
+        
+        codec_details = self.get_codec_details(media_type, codec_name)
+        if not codec_details:
+            self.logger.warning(f"❌ DIAGNOSTIC: Aucun détail trouvé pour codec {codec_name}")
+            return []
+
+        self.logger.info(f"📋 DIAGNOSTIC: Détails codec trouvés: {codec_details}")
+
+        all_encoders = []
+        # Utiliser `[]` comme valeur par défaut, car c'est le format pour les images/audio.
+        encoders_by_type = codec_details.get("encoders", [])
+
+        if isinstance(encoders_by_type, dict):
+            # Gérer la structure de dictionnaire pour la vidéo (cpu, nvidia, etc.)
+            self.logger.debug("Structure d'encodeur de type 'dict' (vidéo) détectée.")
+            for encoder_list in encoders_by_type.values():
+                all_encoders.extend(encoder_list)
+        elif isinstance(encoders_by_type, list):
+            # Gérer la structure de liste pour audio/image
+            self.logger.debug("Structure d'encodeur de type 'list' (audio/image) détectée.")
+            all_encoders.extend(encoders_by_type)
+
+        self.logger.info(f"📦 DIAGNOSTIC: Encodeurs définis dans JSON: {all_encoders}")
+        self.logger.info(f"🔧 DIAGNOSTIC: Encodeurs FFmpeg disponibles: {len(self.available_ffmpeg_encoders)} encodeurs")
+        self.logger.debug(f"🔧 DIAGNOSTIC: Liste complète FFmpeg: {self.available_ffmpeg_encoders}")
+
+        # Filtrer pour ne garder que les encodeurs que l'instance ffmpeg locale connaît
+        supported_encoders = [enc for enc in all_encoders if enc in self.available_ffmpeg_encoders]
+        
+        self.logger.info(f"✅ DIAGNOSTIC: Encodeurs supportés finalement: {supported_encoders}")
+        
+        if not supported_encoders and all_encoders:
+            self.logger.warning(f"⚠️ DIAGNOSTIC: Aucun encodeur supporté pour {codec_name}!")
+            self.logger.warning(f"   - Encodeurs demandés: {all_encoders}")
+            self.logger.warning(f"   - Vérifiez que FFmpeg supporte ces encodeurs:")
+            for enc in all_encoders:
+                self.logger.warning(f"     * {enc}")
+        
+        return supported_encoders
+
+    def get_extensions_for_codec(self, media_type: str, codec_name: str) -> List[str]:
+        """Retourne les extensions de fichier pour un codec."""
+        codec_details = self.get_codec_details(media_type, codec_name)
+        return codec_details.get("extensions", []) if codec_details else []
+
+    # Méthode statique pour récupérer une liste détaillée des encodeurs disponibles sur le système
+    # La liste retournée contient des dictionnaires {"name", "codec", "description"}
+    # Elle fusionne les informations fournies dans codecs.json avec celles réellement supportées par ffmpeg
+    # Un cache est utilisé pour éviter de relire et reparser le fichier à chaque appel
+    @staticmethod
+    def available_encoders() -> List[Dict[str, str]]:
+        global _available_encoders_info_cache
+
+        # Retourner immédiatement si déjà calculé
+        if _available_encoders_info_cache is not None:
+            return _available_encoders_info_cache
+
+        encoders_supported = set(get_ffmpeg_encoders())
+        detailed_encoders: List[Dict[str, str]] = []
+
+        # Calculer le chemin absolu vers codecs.json (un niveau au-dessus de ce module)
+        codecs_path = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, "codecs.json"))
+
+        try:
+            # Charger la définition des codecs afin de disposer du mapping codec → encodeurs
+            with open(codecs_path, "r", encoding="utf-8") as f:
+                codec_db = json.load(f)
+
+            media_categories = ["video", "audio", "image"]
+            for category in media_categories:
+                for codec_entry in codec_db.get(category, []):
+                    codec_name = codec_entry.get("codec")
+                    description = codec_entry.get("name", "")
+                    encoders_field = codec_entry.get("encoders", {})
+
+                    # Unifier le format en liste d'encodeurs
+                    encoder_list: List[str] = []
+                    if isinstance(encoders_field, dict):
+                        for sublist in encoders_field.values():
+                            encoder_list.extend(sublist)
+                    elif isinstance(encoders_field, list):
+                        encoder_list.extend(encoders_field)
+
+                    # Garder uniquement ceux réellement supportés par ffmpeg
+                    for enc in encoder_list:
+                        if enc in encoders_supported:
+                            detailed_encoders.append({
+                                "name": enc,
+                                "codec": codec_name,
+                                "description": description
+                            })
+
+            # Tri alphabétique par nom pour un affichage cohérent
+            detailed_encoders.sort(key=lambda e: e["name"])
+
+        except Exception as e:
+            # En cas d'erreur (fichier manquant, JSON invalide, …), on se rabat sur la liste brute d'encodeurs
+            detailed_encoders = [{"name": enc, "codec": "unknown", "description": ""} for enc in sorted(encoders_supported)]
+
+        # Mise en cache et retour
+        _available_encoders_info_cache = detailed_encoders
+        return detailed_encoders
+
+    @staticmethod
+    def available_codecs() -> Dict[str, List[str]]:
+        global _available_codecs_cache
+
+        # Retourner immédiatement si déjà construite
+        if _available_codecs_cache is not None:
+            return _available_codecs_cache
+
+        codecs_by_type = {"video": [], "audio": [], "image": []}
+
+        # Tentative primaire : interroger ffmpeg directement
+        try:
+            result = subprocess.run(["ffmpeg", "-hide_banner", "-codecs"], capture_output=True, text=True, check=True)
+
+            # Regex pour extraire le nom du codec et son type (V=video, A=audio, S=subtitles=image proxy)
+            codec_line_re = re.compile(r"^\s(?:D|E|\.) (V|A|S|\.) .... .\s+(\w+)")
+
+            for line in result.stdout.splitlines():
+                match = codec_line_re.match(line)
+                if match:
+                    type_flag, codec_name = match.groups()
+                    if type_flag == 'V': codecs_by_type["video"].append(codec_name)
+                    elif type_flag == 'A': codecs_by_type["audio"].append(codec_name)
+                    elif type_flag == 'S': codecs_by_type["image"].append(codec_name)  # Approximation
+
+        except Exception:
+            # En cas d'échec, on passera à la seconde méthode (codecs.json)
+            pass
+
+        # Si l'une des catégories est vide, on complète via codecs.json
+        if not all(codecs_by_type.values()):
             try:
-                result = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True, check=True)
-                encoders = []
-                codec_pattern = re.compile(r'\(codec (\w+)\)')
-                encoder_line_re = re.compile(r"^\s([VAS])([.FSXBD]{5})\s+(\w+)\s+(.*)$")
-                for line in result.stdout.splitlines():
-                    match = encoder_line_re.match(line)
-                    if match:
-                        type_flag, flags, encoder_name, description = match.groups()
-                        
-                        match = codec_pattern.search(description)
-                        implemented_codec = match.group(1) if match else None
-                        
-                        if not implemented_codec:
-                            if "h264" in encoder_name: implemented_codec = "h264"
-                            elif "h265" in encoder_name or "hevc" in encoder_name: implemented_codec = "hevc"
-                            elif "av1" in encoder_name: implemented_codec = "av1"
-                            elif "vp9" in encoder_name: implemented_codec = "vp9"
-                            elif "webp" in encoder_name: implemented_codec = "webp"
-                            elif "jpegxl" in encoder_name or "jxl" in encoder_name: implemented_codec = "jpegxl"
-                            elif "heic" in encoder_name or "hevc_image" in encoder_name: implemented_codec = "heic"
-                            elif "aac" in encoder_name: implemented_codec = "aac"
-                            elif "mp3" in encoder_name: implemented_codec = "mp3" # Use "mp3" to match available_codecs
-                            elif "flac" == encoder_name: implemented_codec = "flac"
-                            elif "alac" == encoder_name: implemented_codec = "alac"
-                            elif "pcm_s16le" == encoder_name: implemented_codec = "pcm_s16le"
-                            elif "opus" in encoder_name: implemented_codec = "opus" # e.g. libopus
-                            elif "vorbis" in encoder_name: implemented_codec = "vorbis" # e.g. libvorbis
+                codecs_path = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, "codecs.json"))
+                with open(codecs_path, "r", encoding="utf-8") as f:
+                    codec_db = json.load(f)
+                for category in ("video", "audio", "image"):
+                    if not codecs_by_type[category]:
+                        codecs_by_type[category] = [entry.get("codec") for entry in codec_db.get(category, [])]
+            except Exception:
+                # Dernier recours : valeurs par défaut
+                if not codecs_by_type["video"]: codecs_by_type["video"] = ["h264", "hevc", "vp9", "av1"]
+                if not codecs_by_type["audio"]: codecs_by_type["audio"] = ["aac", "mp3", "flac", "opus"]
+                if not codecs_by_type["image"]: codecs_by_type["image"] = ["webp", "png", "jpeg"]
 
-                        encoders.append({
-                            "name": encoder_name,
-                            "description": description,
-                            "codec": implemented_codec
-                        })
-                cls._encoders_cache = encoders
-            except Exception as e:
-                print(f"Échec de la récupération des encodeurs depuis ffmpeg : {e}")
-                print("Utilisation d'une liste d'encodeurs par défaut.")
-                cls._encoders_cache = [
-                    # Vidéo
-                    {"name": "libx264", "description": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10", "codec": "h264"},
-                    {"name": "libx265", "description": "H.265 / HEVC", "codec": "hevc"},
-                    {"name": "libvpx-vp9", "description": "VP9", "codec": "vp9"},
-                    {"name": "libaom-av1", "description": "AV1", "codec": "av1"},
-                    # Audio
-                    {"name": "aac", "description": "AAC (Advanced Audio Coding)", "codec": "aac"},
-                    {"name": "libmp3lame", "description": "MP3 (MPEG audio layer 3)", "codec": "mp3"},
-                    {"name": "flac", "description": "FLAC (Free Lossless Audio Codec)", "codec": "flac"},
-                    {"name": "opus", "description": "Opus", "codec": "opus"},
-                    {"name": "libvorbis", "description": "Vorbis", "codec": "vorbis"},
-                    {"name": "pcm_s16le", "description": "PCM signed 16-bit little-endian", "codec": "pcm_s16le"},
-                    {"name": "pcm_alaw", "description": "PCM A-law", "codec": "pcm_alaw"},
-                    {"name": "pcm_mulaw", "description": "PCM mu-law", "codec": "pcm_mulaw"},
-                    # Image
-                    {"name": "libwebp", "description": "WebP", "codec": "webp"},
-                    {"name": "png", "description": "PNG (Portable Network Graphics) image", "codec": "png"},
-                    {"name": "mjpeg", "description": "MJPEG (Motion JPEG)", "codec": "mjpeg"},
-                ]
-        return cls._encoders_cache
+        # Tri alphabétique pour la cohérence
+        for cat in codecs_by_type:
+            codecs_by_type[cat] = sorted(set(codecs_by_type[cat]))
 
-    @classmethod
-    def is_hardware_encoder(cls, encoder_name: str) -> bool:
-        """Détermine si un encodeur utilise l'accélération hardware"""
-        hw_patterns = [
-            # NVIDIA
-            'nvenc', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc',
-            # AMD
-            'amf', 'h264_amf', 'hevc_amf',
-            # Intel QuickSync
-            'qsv', 'h264_qsv', 'hevc_qsv', 'av1_qsv',
-            # Apple VideoToolbox
-            'videotoolbox', 'h264_videotoolbox', 'hevc_videotoolbox',
-            # ARM Mali
-            'v4l2m2m',
-            # Other hardware
-            'vaapi', 'vdpau', 'mediacodec'
-        ]
-        return any(pattern in encoder_name.lower() for pattern in hw_patterns)
-
-    @classmethod
-    def get_hardware_encoders(cls):
-        """Retourne uniquement les encodeurs hardware disponibles"""
-        if cls._hw_encoders_cache is None:
-            all_encoders = cls.available_encoders()
-            # La structure a changé en dictionnaire
-            cls._hw_encoders_cache = [encoder for encoder in all_encoders 
-                                     if cls.is_hardware_encoder(encoder["name"])]
-        return cls._hw_encoders_cache
-
-    @classmethod
-    def available_codecs(cls):
-        if cls._codecs_cache is None:
-            try:
-                result = subprocess.run(["ffmpeg", "-hide_banner", "-codecs"], capture_output=True, text=True, check=True)
-                video, audio, image = set(), set(), set()
-                
-                # Regex pour extraire le nom du codec
-                codec_line_re = re.compile(r"^\s(?:D|E|\.)(V|A|S|\.)(?:F|\.)(?:S|\.)(?:D|\.)(?:T|\.)(?:I|\.)\s+(\w+)")
-
-                for line in result.stdout.splitlines():
-                    match = codec_line_re.match(line)
-                    if match:
-                        type_flag, name = match.groups()
-                        if type_flag == 'V':
-                            video.add(name)
-                        elif type_flag == 'A':
-                            audio.add(name)
-                        elif type_flag == 'S':
-                             # Pour l'instant on considère les sous-titres comme des 'images' pour le UI
-                            image.add(name)
-                
-                # Ajout manuel des formats d'image courants qui peuvent ne pas être listés comme des codecs traditionnels
-                image.update(["png", "mjpeg", "jpg", "webp", "tiff", "bmp", "gif", "avif", "jpegxl", "heic"])
-
-                cls._codecs_cache = {
-                    "video": ["h264", "hevc", "vp9", "av1"] + sorted([x for x in list(video) if x not in ["h264", "hevc", "vp9", "av1"]]) or ["h264", "hevc", "vp9", "av1", "mpeg4"],
-                    "audio": ["aac", "mp3", "opus", "flac"] + sorted([x for x in list(audio) if x not in ["aac", "mp3", "opus", "flac"]]) or ["aac", "mp3", "opus", "flac"],
-                    "image": ["webp", "png", "jpeg", "avif", "jpegxl", "heic"] + sorted([x for x in list(image) if x not in ["webp", "png", "jpeg", "avif", "jpegxl", "heic"]]) or ["webp", "png", "jpeg", "bmp", "jpegxl", "heic"]
-                }
-            except (FileNotFoundError, subprocess.CalledProcessError) as e:
-                messagebox.showerror("Erreur FFmpeg", f"Impossible de lister les codecs: {e}")
-                cls._codecs_cache = {"video": [], "audio": [], "image": []}
-        return cls._codecs_cache 
+        _available_codecs_cache = codecs_by_type
+        return codecs_by_type 

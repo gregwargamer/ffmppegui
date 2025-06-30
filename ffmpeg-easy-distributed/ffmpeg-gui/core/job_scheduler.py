@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import time
-from typing import List, Dict, Optional, Any, Callable
+from typing import List, Dict, Optional, Any, Callable, Tuple
 import uuid
 
 from shared.messages import JobConfiguration, JobProgress, JobResult, ServerInfo, JobStatus
@@ -16,7 +16,8 @@ class JobScheduler:
         self.distributed_client = distributed_client
         self.capability_matcher = capability_matcher
         self.local_server = LocalServer()  # Serveur local intégré
-        self.job_queue: asyncio.Queue[JobConfiguration] = asyncio.Queue()
+        #file prioritaire (priority, timestamp, JobConfiguration)
+        self.job_queue: asyncio.PriorityQueue[tuple[int, float, JobConfiguration]] = asyncio.PriorityQueue()
         self.active_jobs: Dict[str, JobConfiguration] = {}
         self.job_status_callbacks: Dict[str, Callable[[JobProgress], Any]] = {}
         self.job_completion_callbacks: Dict[str, Callable[[JobResult], Any]] = {}
@@ -51,7 +52,8 @@ class JobScheduler:
                       completion_callback: Callable[[JobResult], Any]):
         """Ajoute un job à la file d'attente pour traitement."""
         job_config.job_id = str(uuid.uuid4()) # Assigner un ID unique si non déjà fait
-        await self.job_queue.put(job_config)
+        #utiliser l'heure pour conserver l'ordre FIFO parmi même priorité
+        await self.job_queue.put((job_config.priority, time.time(), job_config))
         self.active_jobs[job_config.job_id] = job_config
         self.job_status_callbacks[job_config.job_id] = progress_callback
         self.job_completion_callbacks[job_config.job_id] = completion_callback
@@ -61,7 +63,7 @@ class JobScheduler:
         """Boucle principale de planification des jobs."""
         while True:
             try:
-                job = await self.job_queue.get()
+                _priority, _ts, job = await self.job_queue.get()
                 self.logger.info(f"Tentative de planification du job: {job.job_id}")
                 
                 # Trouver le meilleur serveur distant
@@ -78,7 +80,7 @@ class JobScheduler:
                 job.assigned_to = assigned_server_id
                 job.status = JobStatus.ASSIGNED
                 progress_callback = self._get_job_progress_callback(job.job_id)
-                await progress_callback(JobProgress(job_id=job.job_id, progress=0, speed="N/A", time="N/A", frame=0, fps=0.0))
+                await progress_callback(JobProgress(job_id=job.job_id, progress=0, speed="N/A", current_frame=0, total_frames=None, fps=0.0, bitrate=None, eta=None, server_id="local"))
 
                 if best_servers and connected_servers:
                     # Utiliser un serveur distant
@@ -111,7 +113,7 @@ class JobScheduler:
         try:
             if not self.local_server.is_available():
                 self.logger.warning(f"Serveur local occupé. Job {job.job_id} remis en file d'attente.")
-                await self.job_queue.put(job)
+                await self.job_queue.put((job.priority, time.time(), job))
                 await asyncio.sleep(2)
                 return
 
@@ -170,19 +172,75 @@ class JobScheduler:
         return self.active_jobs
 
     async def cancel_job(self, job_id: str):
-        """Annule un job en cours ou en attente."""
-        # TODO: Implémenter l'annulation côté serveur via distributed_client
-        if job_id in self.active_jobs:
-            self.logger.info(f"Annulation du job {job_id} demandée.")
-            # Si le job est en cours, envoyer un message d'annulation au serveur
-            # Sinon, le retirer de la file d'attente
-            # Pour l'instant, juste le retirer des listes locales
+        """Annule un job. Gère les cas distant et local."""
+        self.logger.info(f"Demande d'annulation pour le job {job_id}")
+
+        # Vérifier si le job est actif (en cours ou déjà assigné)
+        job_config = self.active_jobs.get(job_id)
+
+        if job_config:
+            assigned_server = getattr(job_config, 'assigned_to', None)
+
+            if assigned_server == self.local_server.server_id:
+                # Annulation locale
+                success = await self.local_server.cancel_job(job_id)
+                self.logger.info(f"Annulation locale du job {job_id} -> {success}")
+            elif assigned_server:
+                # Annulation sur serveur distant
+                success = await self.distributed_client.cancel_job_on_server(assigned_server, job_id)
+                self.logger.info(f"Annulation distante du job {job_id} -> {success}")
+            else:
+                success = False
+                self.logger.warning(f"Job {job_id} n'a pas de serveur assigné")
+
+            # Nettoyer les structures internes quel que soit le résultat
             self.active_jobs.pop(job_id, None)
             self.job_status_callbacks.pop(job_id, None)
             self.job_completion_callbacks.pop(job_id, None)
-            # Si le job est dans la queue, il faut le retirer. C'est plus complexe avec asyncio.Queue.
-            # Une solution serait de vider la queue et de remettre les jobs non annulés.
-            self.logger.warning(f"Annulation de job {job_id} non implémentée côté serveur/queue.")
+
+        else:
+            # Job peut être encore dans la queue -> besoin de le retirer
+            new_queue = asyncio.PriorityQueue()
+            while not self.job_queue.empty():
+                pri, ts, queued_job = await self.job_queue.get()
+                if queued_job.job_id != job_id:
+                    await new_queue.put((pri, ts, queued_job))
+            self.job_queue = new_queue
+            self.logger.info(f"Job {job_id} retiré de la file d'attente si présent.")
+
+    async def pause_job(self, job_id: str):
+        """Met en pause un job actif (local ou distant)"""
+        self.logger.info(f"Demande de pause pour le job {job_id}")
+        job_config = self.active_jobs.get(job_id)
+        if not job_config:
+            self.logger.warning(f"Job {job_id} introuvable ou déjà terminé")
+            return False
+        assigned_server = getattr(job_config, 'assigned_to', None)
+        success = False
+        if assigned_server == self.local_server.server_id:
+            success = await self.local_server.pause_job(job_id)
+        elif assigned_server:
+            success = await self.distributed_client.pause_job_on_server(assigned_server, job_id)
+        if success:
+            job_config.status = JobStatus.PAUSED
+        return success
+
+    async def resume_job(self, job_id: str):
+        """Reprend un job précédemment mis en pause (local ou distant)"""
+        self.logger.info(f"Demande de reprise pour le job {job_id}")
+        job_config = self.active_jobs.get(job_id)
+        if not job_config:
+            self.logger.warning(f"Job {job_id} introuvable ou déjà terminé")
+            return False
+        assigned_server = getattr(job_config, 'assigned_to', None)
+        success = False
+        if assigned_server == self.local_server.server_id:
+            success = await self.local_server.resume_job(job_id)
+        elif assigned_server:
+            success = await self.distributed_client.resume_job_on_server(assigned_server, job_id)
+        if success:
+            job_config.status = JobStatus.RUNNING
+        return success
 
     def register_progress_callback(self, callback: Callable[[JobProgress], Any]):
         """Enregistre un callback global pour le progrès des jobs."""

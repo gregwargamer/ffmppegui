@@ -11,10 +11,12 @@ class ServerStatus(Enum):
 class JobStatus(Enum):
     PENDING = "pending"
     QUEUED = "queued"
+    ASSIGNED = "assigned"
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    PAUSED = "paused"
 
 class EncoderType(Enum):
     SOFTWARE = "software"

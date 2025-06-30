@@ -19,6 +19,7 @@ class JobEditWindow:
         self.server_var = tk.StringVar()
         self.global_encoder_var = tk.StringVar(value=job.encoder)
         self.compatibility_var = tk.StringVar()
+        self.priority_var = tk.IntVar(value=getattr(job, 'priority', 5))
 
         self.build_ui()
         self._update_server_list()
@@ -29,6 +30,7 @@ class JobEditWindow:
         main_frame.pack(fill=tk.BOTH, expand=True)
 
         self._build_server_selection_frame(main_frame)
+        self._build_priority_frame(main_frame)
         # ... other job editing UI elements would go here ...
 
         save_button = ttk.Button(main_frame, text="Save Changes", command=self.save_changes)
@@ -131,6 +133,23 @@ class JobEditWindow:
         possible_alts = alternatives_map.get(target_encoder, [])
         return [alt for alt in possible_alts if alt in available]
 
+    def _build_priority_frame(self, parent):
+        prio_frame = ttk.LabelFrame(parent, text="Priorité du job (1 = haute)")
+        prio_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        ttk.Spinbox(prio_frame, from_=1, to=10, textvariable=self.priority_var, width=5).grid(row=0, column=0, padx=5, pady=5, sticky="w")
+
     def save_changes(self):
-        # ... logic to save changes to the job object ...
+        #mettre à jour la priorité dans l'objet job
+        try:
+            prio = int(self.priority_var.get())
+            if 1 <= prio <= 10:
+                self.job.priority = prio
+            else:
+                messagebox.showwarning("Priorité invalide", "La priorité doit être comprise entre 1 et 10")
+                return
+        except ValueError:
+            messagebox.showwarning("Priorité invalide", "Valeur numérique requise")
+            return
+
         self.window.destroy()

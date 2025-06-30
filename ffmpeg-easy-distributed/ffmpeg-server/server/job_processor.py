@@ -3,6 +3,9 @@ import logging
 import re
 import time
 from pathlib import Path
+import os
+import signal
+import sys
 
 from shared.messages import JobConfiguration, JobProgress, JobResult, JobStatus, ServerCapabilities
 from server.file_manager import FileManager
@@ -17,6 +20,7 @@ class JobProcessor:
         self.completion_callback = completion_callback
         self.process = None
         self.cancelled = False
+        self.paused = False
         self.logger = logging.getLogger(__name__)
 
     async def start(self):
@@ -90,8 +94,7 @@ class JobProcessor:
             )
             await self.completion_callback(result)
         finally:
-            if input_path.exists():
-                input_path.unlink(missing_ok=True)
+            self.logger.debug(f"Traitement du job {self.job_config.job_id} terminé. Les fichiers temporaires seront conservés jusqu'à confirmation.")
 
     async def cancel(self):
         """Annule le job en cours"""
@@ -148,3 +151,40 @@ class JobProcessor:
                     self.logger.warning(f"Erreur parsing progression FFmpeg: {e} dans ligne: {line}")
             if self.cancelled:
                 break
+
+    async def pause(self):
+        """Met en pause le processus FFmpeg en envoyant SIGSTOP (si disponible)."""
+        if self.process and self.process.returncode is None and not self.paused:
+            try:
+                if hasattr(signal, "SIGSTOP"):
+                    self.process.send_signal(signal.SIGSTOP)
+                else:
+                    # Fallback avec psutil si SIGSTOP indisponible (Windows)
+                    try:
+                        import psutil  # type: ignore
+                        psutil.Process(self.process.pid).suspend()
+                    except Exception:
+                        self.logger.warning("Pause non prise en charge sur cette plateforme")
+                        return
+                self.paused = True
+                self.logger.info(f"⏸️  Job {self.job_config.job_id} mis en pause")
+            except Exception as e:
+                self.logger.error(f"Erreur lors de la mise en pause du job {self.job_config.job_id}: {e}")
+
+    async def resume(self):
+        """Reprend un processus FFmpeg précédemment mis en pause avec SIGCONT."""
+        if self.process and self.process.returncode is None and self.paused:
+            try:
+                if hasattr(signal, "SIGCONT"):
+                    self.process.send_signal(signal.SIGCONT)
+                else:
+                    try:
+                        import psutil  # type: ignore
+                        psutil.Process(self.process.pid).resume()
+                    except Exception:
+                        self.logger.warning("Resume non pris en charge sur cette plateforme")
+                        return
+                self.paused = False
+                self.logger.info(f"▶️  Job {self.job_config.job_id} repris")
+            except Exception as e:
+                self.logger.error(f"Erreur lors de la reprise du job {self.job_config.job_id}: {e}")

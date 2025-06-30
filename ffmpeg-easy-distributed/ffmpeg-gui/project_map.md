@@ -18,11 +18,35 @@ This directory contains the backend logic of the application.
 
 - **`core/settings.py`**: Manages the application's settings. It defines the default settings, loads settings from a JSON file, and saves settings to a JSON file.
 
+    A new field **`max_reconnect_attempts`** has been added to `DistributedSettings`. It limits how many times the application will attempt to reconnect to a distributed server (default `10`, `-1` for unlimited).
+
+    **`reconnect_initial_delay`** and **`reconnect_max_delay`** allow tuning the exponential back-off (defaults: 5 s → 60 s).
+
+    **`ping_timeout`** sets how long the GUI waits (seconds) for a PONG or SERVER_INFO response (default 5 s).
+
 - **`core/encode_job.py`**: Defines the `EncodeJob` class, representing a single source file to be processed. Crucially, an `EncodeJob` now contains a list of `OutputConfig` objects. Each `OutputConfig` defines a specific output to be generated from the source, including its own encoder, quality settings (CRF, bitrate, image quality), presets, custom flags, container type, and filter configurations (like scaling, LUTs, watermarks). This allows for generating multiple different outputs (e.g., 1080p H.264, 720p AV1, audio-only AAC) from a single source job. The overall status and progress of an `EncodeJob` are aggregated from its `OutputConfig` instances.
 
 - **`core/ffmpeg_helpers.py`**: Provides helper functions for interacting with FFmpeg. It includes functions to get available encoders and codecs, including detection of hardware-accelerated encoders. It has been updated to better recognize and categorize newer image formats like HEIC, AVIF, and JPEG XL.
 
-- **`core/worker_pool.py`**: Implements a worker pool for running encoding tasks in parallel. Each task in the pool now corresponds to processing a single `OutputConfig` from an `EncodeJob`.
+    The global cache of encoders is now **thread-safe** via a `threading.Lock`, preventing race conditions when multiple threads query FFmpeg concurrently.
+
+    UI loop interval is now configurable via `UISettings.tk_loop_interval_ms` (default **50 ms**). `AsyncTkApp` uses this value instead of a hard-coded constant.
+
+    All pending `after` callbacks are now cancelled on application exit to avoid Tcl errors like *invalid command name "_update_loop"*.
+
+    The cancellation loop now properly splits the list returned by `after info`, ensuring every remaining callback is removed.
+
+- **`core/job_scheduler.py`**: Implements a worker pool for running encoding tasks in parallel. Each task in the pool now corresponds to processing a single `OutputConfig` from an `EncodeJob`.
+
+    The `cancel_job()` method now fully supports cancellation: if the job is assigned to the local server, it calls `LocalServer.cancel_job`; if assigned to a remote server, it uses `DistributedClient.cancel_job_on_server` which sends a `JOB_CANCEL` message. Jobs still queued are removed from the asyncio queue.
+
+- **`core/distributed_client.py`**: Provides the high-level WebSocket client for communicating with distributed encoding servers. It maintains active connections, listens for messages, and handles job submission and file downloads.
+
+    The `_reconnect_server()` coroutine now respects `settings.distributed.max_reconnect_attempts`, applies exponential back-off (capped at 60 s) and stops trying after the configured limit, logging a clear error message.
+
+    A new `cancel_job_on_server()` method sends a `JOB_CANCEL` message to a given server, used by the scheduler for remote cancellation.
+
+- **`core/hardware_detector.py`**: Proxy that re-exports `HardwareDetector` from the shared `common.hardware_detector` module (no more duplication).
 
 ### `gui` Directory
 
@@ -36,75 +60,16 @@ This directory contains the user interface components of the application.
 
 - **`gui/settings_window.py`**: The settings window, which allows users to configure the application's preferences.
 
-- **`gui/job_edit_window.py`**: This window has been significantly overhauled. It no longer edits parameters for a single job monolithically. Instead, it allows users to manage and edit multiple `OutputConfig` instances for a given `EncodeJob` (source file). Key features:
-    - Displays a list of `OutputConfig`s for the job.
-    - Allows adding, removing, and duplicating `OutputConfig`s.
-    - When an `OutputConfig` is selected, its specific settings (name, mode, encoder, quality, preset, container, custom flags) are loaded into dedicated tabs (Video, Audio, Image).
-    - The quality input fields and labels within these tabs adapt dynamically based on the selected encoder and mode for that specific `OutputConfig` (similar to the main window's global panel).
-    - Saves changes back to the specific `OutputConfig` object within the `EncodeJob`.
+- **`gui/job_edit_window.py`**: Allows editing a single job before/after it is enqueued. Users can now choose the encoding server (auto/manual) **and assign a priority (1–10)** via a spinbox; the chosen value is saved to `job.priority`.
 
 - **`gui/log_viewer_window.py`**: The log viewer window, which displays the FFmpeg logs for each job (likely per `OutputConfig` task).
 
 - **`gui/folder_watcher.py`**: Implements a folder watcher that automatically adds new files to the encoding queue.
 
+    A simple **debounce** (1 s) has been added to avoid duplicate "file created" events when applications write a file in several passes.
+
 - **`gui/batch_operations_window.py`**: The batch operations window, which allows users to apply encoding settings to multiple jobs at once.
 
 - **`gui/audio_tracks_window.py`**: The audio tracks window. It has been significantly enhanced to allow per-track management. For each audio track, the user can choose to include it, and if so, whether to 'copy' it (stream copy) or 're-encode' it using the globally defined audio settings.
 
-- **`gui/advanced_filters_window.py`**: The advanced filters window, which allows users to apply advanced filters to a job, such as brightness, contrast, and saturation.
-
-## Key Functionality
-
-### Adding Files
-
-Files can be added to the encoding queue in several ways:
-
-- **"Add Files" button**: Opens a file dialog to select one or more files.
-- **"Add Folder" button**: Opens a folder dialog to add all files in a folder and its subdirectories.
-- **"Add from URL" button**: Opens a dialog to paste a URL. The application will use `yt-dlp` to download the video in the background and add it to the queue automatically.
-- **Drag and drop**: Files and folders can be dragged and dropped onto the main window.
-- **Folder watcher**: The application can be configured to watch a folder for new files and automatically add them to the queue.
-
-### Encoding Settings
-
-The encoding settings can be configured in the main window. The settings are divided into three sections:
-
-- **File Selection**: Allows users to select the input and output folders.
-- **Encoding Settings**: Allows users to select the encoder, quality, preset, and container for the output file. This section now also includes **Trimming** controls to set a start and end time for the encode.
-- **Encoding Queue**: Displays the list of encoding jobs and their status.
-
-### Job Management
-
-The encoding queue displays the list of jobs and their status. Users can perform the following actions on jobs:
-
-- **Edit**: Opens the job edit window to modify the encoding parameters of a single job.
-- **Pause**: Pauses a running job.
-- **Resume**: Resumes a paused job.
-- **Cancel**: Cancels a running or pending job.
-- **Remove**: Removes a job from the queue.
-- **Merge Videos**: Opens a window to merge multiple video files into a single file.
-
-### Presets
-
-The application supports presets, which allow users to save and load encoding settings. Presets are stored in the `settings.json` file.
-
-### Logging
-
-The application provides a log viewer that displays the FFmpeg logs for each job. This is useful for debugging encoding issues.
-
-### Batch Operations
-
-The batch operations window allows users to apply encoding settings to multiple jobs at once. This is useful for encoding a large number of files with the same settings.
-
-### Advanced Filters
-
-The advanced filters window allows users to apply advanced filters to a job, such as brightness, contrast, and saturation.
-
-### Audio Tracks
-
-The application provides a powerful audio track management window. For each audio track detected in the source file, users can:
-- **Include or Exclude**: Choose whether to keep the track in the output.
-- **Set Action per Track**:
-    - **Copy**: Perform a direct stream copy of the track, which is fast and preserves quality.
-    - **Re-encode**: Re-encode the track using the codec and bitrate specified in the "Re-encoding Settings" section of the window.
-This allows for fine-grained control, such as keeping a 5.1 track while re-encoding a commentary track to a lower bitrate.
+- **`gui/advanced_filters_window.py`

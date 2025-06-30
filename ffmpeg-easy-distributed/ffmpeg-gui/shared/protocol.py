@@ -30,6 +30,8 @@ class MessageType(Enum):
     JOB_COMPLETED = "job_completed"
     JOB_FAILED = "job_failed"
     JOB_CANCEL = "job_cancel"
+    JOB_PAUSE = "job_pause"
+    JOB_RESUME = "job_resume"
     JOB_REASSIGN = "job_reassign"
     
     # Transfert de fichiers
@@ -38,6 +40,7 @@ class MessageType(Enum):
     FILE_UPLOAD_COMPLETE = "file_upload_complete"
     FILE_DOWNLOAD_REQUEST = "file_download_request"
     FILE_DOWNLOAD_START = "file_download_start"
+    FILE_CLEANUP = "file_cleanup"
     
     # Erreurs
     ERROR = "error"

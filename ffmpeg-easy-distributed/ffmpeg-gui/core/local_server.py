@@ -225,6 +225,52 @@ class LocalServer:
                 self.logger.error(f"❌ Erreur annulation job {job_id}: {e}")
         return False
 
+    async def pause_job(self, job_id: str) -> bool:
+        """Met en pause un job local en envoyant SIGSTOP"""
+        if job_id in self.active_jobs:
+            process = self.active_jobs[job_id]
+            if process.poll() is None:
+                try:
+                    import signal
+                    if hasattr(signal, 'SIGSTOP'):
+                        process.send_signal(signal.SIGSTOP)
+                    else:
+                        import psutil
+                        try:
+                            psutil.Process(process.pid).suspend()
+                        except ImportError:
+                            psutil = None
+                        if psutil:
+                            psutil.Process(process.pid).suspend()
+                    self.logger.info(f"⏸️  Job local {job_id} mis en pause")
+                    return True
+                except Exception as e:
+                    self.logger.error(f"Erreur lors de la mise en pause du job {job_id}: {e}")
+        return False
+
+    async def resume_job(self, job_id: str) -> bool:
+        """Reprend un job local en envoyant SIGCONT"""
+        if job_id in self.active_jobs:
+            process = self.active_jobs[job_id]
+            if process.poll() is None:
+                try:
+                    import signal
+                    if hasattr(signal, 'SIGCONT'):
+                        process.send_signal(signal.SIGCONT)
+                    else:
+                        import psutil
+                        try:
+                            psutil.Process(process.pid).resume()
+                        except ImportError:
+                            psutil = None
+                        if psutil:
+                            psutil.Process(process.pid).resume()
+                    self.logger.info(f"▶️  Job local {job_id} repris")
+                    return True
+                except Exception as e:
+                    self.logger.error(f"Erreur lors de la reprise du job {job_id}: {e}")
+        return False
+
     def is_available(self) -> bool:
         """Vérifie si le serveur local est disponible pour de nouveaux jobs"""
         return len(self.active_jobs) < 2  # Limite à 2 jobs simultanés

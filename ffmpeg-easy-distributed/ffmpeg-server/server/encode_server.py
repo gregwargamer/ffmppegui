@@ -26,6 +26,7 @@ class EncodeServer:
         self.clients: Dict[str, websockets.WebSocketServerProtocol] = {}
         self.active_jobs: Dict[str, JobProcessor] = {}
         self.job_queue: List[JobConfiguration] = []
+        self.job_files: Dict[str, Dict[str, Path]] = {}
         
         self.file_manager = FileManager(config.temp_dir)
         
@@ -214,10 +215,16 @@ class EncodeServer:
             await self.handle_job_submission(client_id, websocket, message)
         elif message.type == MessageType.JOB_CANCEL:
             await self.handle_job_cancellation(websocket, message)
+        elif message.type == MessageType.JOB_PAUSE:
+            await self.handle_job_pause(websocket, message)
+        elif message.type == MessageType.JOB_RESUME:
+            await self.handle_job_resume(websocket, message)
         elif message.type == MessageType.FILE_UPLOAD_START:
             await self.handle_file_upload_start(websocket, message)
         elif message.type == MessageType.FILE_CHUNK:
             await self.handle_file_chunk(websocket, message)
+        elif message.type == MessageType.FILE_CLEANUP:
+            await self.handle_file_cleanup(websocket, message)
         else:
             self.logger.warning(f"⚠️  Type de message non géré: {message.type}")
     
@@ -259,6 +266,11 @@ class EncodeServer:
             accept_msg = Message(MessageType.JOB_ACCEPTED, {'job_id': job_config.job_id, 'estimated_duration': job_config.estimated_duration}, reply_to=message.message_id)
             await send_message(websocket, accept_msg)
             
+            # Storing file paths for later cleanup
+            input_path = self.file_manager.temp_dir / f"{job_config.job_id}_input"
+            output_path = self.file_manager.temp_dir / job_config.output_file
+            self.job_files[job_config.job_id] = {'input': input_path, 'output': output_path}
+            
             processor = JobProcessor(job_config=job_config, file_manager=self.file_manager, capabilities=self.capabilities,
                                      progress_callback=lambda p: self._on_job_progress(client_id, p),
                                      completion_callback=lambda r: self._on_job_completion(client_id, r))
@@ -277,6 +289,18 @@ class EncodeServer:
             await self.active_jobs[job_id].cancel()
             del self.active_jobs[job_id]
             self.logger.info(f"⏹️  Job annulé: {job_id}")
+    
+    async def handle_job_pause(self, websocket, message: Message):
+        job_id = message.data.get('job_id')
+        if job_id in self.active_jobs:
+            await self.active_jobs[job_id].pause()
+            self.logger.info(f"⏸️  Job mis en pause: {job_id}")
+    
+    async def handle_job_resume(self, websocket, message: Message):
+        job_id = message.data.get('job_id')
+        if job_id in self.active_jobs:
+            await self.active_jobs[job_id].resume()
+            self.logger.info(f"▶️  Job repris: {job_id}")
     
     def _is_job_compatible(self, job_config: JobConfiguration) -> bool:
         all_available = (self.capabilities.software_encoders + 
@@ -402,3 +426,34 @@ class EncodeServer:
             await self.file_manager.receive_file_chunk(job_id, chunk)
         else:
             self.logger.warning(f"Message FILE_CHUNK invalide: {message.data}")
+
+    async def handle_file_cleanup(self, websocket, message: Message):
+        job_id = message.data.get('job_id')
+        if not job_id:
+            self.logger.warning("Message FILE_CLEANUP reçu sans job_id.")
+            return
+
+        self.logger.info(f"Demande de nettoyage reçue pour le job {job_id}.")
+        
+        job_paths = self.job_files.pop(job_id, None)
+        
+        if not job_paths:
+            self.logger.warning(f"Aucun chemin de fichier trouvé pour le job {job_id}. Nettoyage peut-être déjà fait.")
+            return
+            
+        input_path = job_paths.get('input')
+        output_path = job_paths.get('output')
+
+        if input_path and input_path.exists():
+            try:
+                input_path.unlink()
+                self.logger.info(f"Fichier d'entrée temporaire supprimé : {input_path}")
+            except OSError as e:
+                self.logger.error(f"Erreur lors de la suppression du fichier d'entrée {input_path}: {e}")
+        
+        if output_path and output_path.exists():
+            try:
+                output_path.unlink()
+                self.logger.info(f"Fichier de sortie temporaire supprimé : {output_path}")
+            except OSError as e:
+                self.logger.error(f"Erreur lors de la suppression du fichier de sortie {output_path}: {e}")

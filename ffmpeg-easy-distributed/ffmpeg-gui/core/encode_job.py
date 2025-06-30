@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 import uuid # For unique IDs for OutputConfig
 from enum import Enum
+import json
 
 # Using a simple class for OutputConfig for now. Could be a dataclass in Python 3.7+
 class OutputConfig:
@@ -55,6 +56,49 @@ class OutputConfig:
         self.watermark_opacity: float = 1.0 # 0.0 (transparent) to 1.0 (opaque)
         self.watermark_padding: int = 10 # Pixels
 
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "dst_path": str(self.dst_path),
+            "mode": self.mode,
+            "encoder": self.encoder,
+            "container": self.container,
+            "quality": self.quality,
+            "cq_value": self.cq_value,
+            "preset": self.preset,
+            "custom_flags": self.custom_flags,
+            "status": self.status,
+            "progress": self.progress,
+            "video_mode": self.video_mode,
+            "bitrate": self.bitrate,
+            "multipass": self.multipass,
+            "longest_side": self.longest_side,
+            "megapixels": self.megapixels,
+            "filters": self.filters,
+            "audio_config": self.audio_config,
+            "subtitle_config": self.subtitle_config,
+            "trim_config": self.trim_config,
+            "gif_config": self.gif_config,
+            "lut_path": self.lut_path,
+            "watermark_path": self.watermark_path,
+            "watermark_position": self.watermark_position,
+            "watermark_scale": self.watermark_scale,
+            "watermark_opacity": self.watermark_opacity,
+            "watermark_padding": self.watermark_padding,
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        # Create a dummy path for init, it will be overwritten
+        config = cls(name=data["name"], initial_dst_path=Path("dummy"), mode=data["mode"])
+        for key, value in data.items():
+            if key == "dst_path":
+                setattr(config, key, Path(value))
+            elif hasattr(config, key):
+                setattr(config, key, value)
+        return config
+
 
 class EncodeJob:
     """Représente un travail d'encodage unique."""
@@ -74,10 +118,55 @@ class EncodeJob:
 
         self.is_cancelled: bool = False # Cancellation applies to all outputs of this job
 
+        self.assigned_server: Optional[str] = None
+        
+        self._media_info_cache: Optional[Dict[str, Any]] = None
+        self._ffprobe_json_cache: Optional[Dict[str, Any]] = None
+
+    def to_dict(self):
+        return {
+            "job_id": self.job_id,
+            "src_path": str(self.src_path),
+            "relative_src_path": str(self.relative_src_path) if self.relative_src_path else None,
+            "mode": self.mode,
+            "outputs": [o.to_dict() for o in self.outputs],
+            "duration": self.duration,
+            "is_cancelled": self.is_cancelled,
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        job = cls(src_path=Path(data["src_path"]), mode=data["mode"])
+        job.job_id = data["job_id"]
+        job.relative_src_path = Path(data["relative_src_path"]) if data.get("relative_src_path") else None
+        job.duration = data.get("duration")
+        job.is_cancelled = data.get("is_cancelled", False)
+        
+        job.outputs = [OutputConfig.from_dict(o_data) for o_data in data["outputs"]]
+        
+        # Reset runtime state for jobs loaded from file
+        for output in job.outputs:
+            if output.status not in ["done", "error", "cancelled"]:
+                output.status = "pending"
+                output.progress = 0
+            output.process = None
+            output.is_paused = False
+
+        return job
+
     @property
     def status(self) -> str:
         """Property to get the overall status, for backward compatibility."""
         return self.get_overall_status()
+
+    @status.setter
+    def status(self, value: str):
+        """Property to set the overall status, propagating to all outputs."""
+        if value == "cancelled":
+            self.cancel_all_outputs()
+        else:
+            for out in self.outputs:
+                out.status = value
 
     def get_overall_status(self) -> str:
         if not self.outputs:
@@ -163,66 +252,84 @@ class EncodeJob:
 
         return f"EncodeJob({self.src_path.name}, {num_outputs} outputs, {self.get_overall_status()})"
 
-    def get_media_info(self) -> Optional[Dict[str, Any]]:
-        """Récupère les informations du fichier média source."""
+    def get_raw_ffprobe_info(self) -> Optional[Dict[str, Any]]:
+        """
+        Retourne les informations brutes de ffprobe en JSON, en utilisant un cache.
+        """
+        if self._ffprobe_json_cache is not None:
+            return self._ffprobe_json_cache
+
         if not self.src_path.exists():
             return None
-        
+
         try:
-            # Utiliser ffprobe pour récupérer les informations du fichier
-            import json
             result = subprocess.run([
                 'ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams',
                 str(self.src_path)
             ], capture_output=True, text=True, timeout=10)
             
             if result.returncode != 0:
-                return None
+                self._ffprobe_json_cache = {"error": f"ffprobe failed with code {result.returncode}", "stderr": result.stderr}
+                return self._ffprobe_json_cache
             
-            ffprobe_data = json.loads(result.stdout)
-            media_info = {}
+            self._ffprobe_json_cache = json.loads(result.stdout)
+            return self._ffprobe_json_cache
+
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, json.JSONDecodeError, FileNotFoundError) as e:
+            self._ffprobe_json_cache = {"error": str(e)}
+            return self._ffprobe_json_cache
+    
+    def get_media_info(self) -> Optional[Dict[str, Any]]:
+        """Récupère les informations formatées du fichier média source."""
+        if self._media_info_cache is not None:
+            return self._media_info_cache
+
+        ffprobe_data = self.get_raw_ffprobe_info()
+        
+        if not ffprobe_data or "error" in ffprobe_data:
+            # Fallback vers les informations basiques si ffprobe échoue
+            if self.src_path.exists():
+                return {
+                    'filename': self.src_path.name,
+                    'size': self._format_file_size(self.src_path.stat().st_size),
+                    'error': ffprobe_data.get("error", "ffprobe not available or failed") if ffprobe_data else "ffprobe failed"
+                }
+            return None
+
+        media_info = {}
+        # Informations générales du fichier
+        if 'format' in ffprobe_data:
+            fmt = ffprobe_data['format']
+            media_info['format'] = fmt.get('format_name', 'Inconnu')
+            media_info['duration'] = self._format_duration(fmt.get('duration'))
+            media_info['size'] = self._format_file_size(fmt.get('size'))
+            media_info['bitrate'] = self._format_bitrate(fmt.get('bit_rate'))
+        
+        # Informations des streams
+        if 'streams' in ffprobe_data:
+            streams = ffprobe_data['streams']
+            video_streams = [s for s in streams if s.get('codec_type') == 'video']
+            audio_streams = [s for s in streams if s.get('codec_type') == 'audio']
             
-            # Informations générales du fichier
-            if 'format' in ffprobe_data:
-                fmt = ffprobe_data['format']
-                media_info['format'] = fmt.get('format_name', 'Inconnu')
-                media_info['duration'] = self._format_duration(fmt.get('duration'))
-                media_info['size'] = self._format_file_size(fmt.get('size'))
-                media_info['bitrate'] = self._format_bitrate(fmt.get('bit_rate'))
+            if video_streams:
+                v = video_streams[0]  # Premier stream vidéo
+                media_info['video_codec'] = v.get('codec_name', 'Inconnu')
+                media_info['resolution'] = f"{v.get('width', '?')}x{v.get('height', '?')}"
+                media_info['fps'] = self._format_fps(v.get('r_frame_rate'))
+                media_info['pixel_format'] = v.get('pix_fmt', 'Inconnu')
             
-            # Informations des streams
-            if 'streams' in ffprobe_data:
-                streams = ffprobe_data['streams']
-                video_streams = [s for s in streams if s.get('codec_type') == 'video']
-                audio_streams = [s for s in streams if s.get('codec_type') == 'audio']
-                
-                if video_streams:
-                    v = video_streams[0]  # Premier stream vidéo
-                    media_info['video_codec'] = v.get('codec_name', 'Inconnu')
-                    media_info['resolution'] = f"{v.get('width', '?')}x{v.get('height', '?')}"
-                    media_info['fps'] = self._format_fps(v.get('r_frame_rate'))
-                    media_info['pixel_format'] = v.get('pix_fmt', 'Inconnu')
-                
-                if audio_streams:
-                    a = audio_streams[0]  # Premier stream audio
-                    media_info['audio_codec'] = a.get('codec_name', 'Inconnu')
-                    media_info['audio_channels'] = a.get('channels', 'Inconnu')
-                    media_info['sample_rate'] = self._format_sample_rate(a.get('sample_rate'))
-                
-                media_info['nb_streams'] = len(streams)
-                media_info['video_streams'] = len(video_streams)
-                media_info['audio_streams'] = len(audio_streams)
+            if audio_streams:
+                a = audio_streams[0]  # Premier stream audio
+                media_info['audio_codec'] = a.get('codec_name', 'Inconnu')
+                media_info['audio_channels'] = a.get('channels', 'Inconnu')
+                media_info['sample_rate'] = self._format_sample_rate(a.get('sample_rate'))
             
-            return media_info
-            
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError, json.JSONDecodeError, FileNotFoundError):
-            # Fallback vers les informations basiques du fichier
-            return {
-                'filename': self.src_path.name,
-                'size': self._format_file_size(self.src_path.stat().st_size),
-                'extension': self.src_path.suffix,
-                'mode': self.mode
-            }
+            media_info['nb_streams'] = len(streams)
+            media_info['video_streams'] = len(video_streams)
+            media_info['audio_streams'] = len(audio_streams)
+        
+        self._media_info_cache = media_info
+        return media_info
     
     def _format_duration(self, duration_str: Optional[str]) -> str:
         """Formate la durée en format lisible."""

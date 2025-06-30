@@ -3,6 +3,8 @@ from core.encode_job import EncodeJob
 from shared.messages import ServerInfo
 from core.settings import Settings
 import logging
+import json
+from pathlib import Path
 
 class AppState:
     """
@@ -40,6 +42,55 @@ class AppState:
         self._observers: List[Callable] = []
         self.logger = logging.getLogger(__name__)
 
+        self.load_queue()
+
+    def load_queue(self, file_path: Path = Path("queue.json")):
+        """Charge la file d'attente depuis un fichier JSON"""
+        if not file_path.exists():
+            self.jobs = []
+            return
+
+        try:
+            with file_path.open('r', encoding='utf-8') as f:
+                jobs_data = json.load(f)
+            
+            self.jobs = [EncodeJob.from_dict(data) for data in jobs_data]
+            
+            # Vérifier si tous les jobs sont terminés
+            all_done = all(job.get_overall_status() in ["done", "cancelled", "error"] for job in self.jobs)
+            if all_done and self.jobs:
+                self.logger.info("Tous les jobs dans la file d'attente précédente sont terminés. Nettoyage de la file.")
+                self.clear_jobs() # Ceci va sauvegarder une file vide
+            else:
+                self.logger.info(f"{len(self.jobs)} jobs chargés depuis la file d'attente.")
+                self.notify_observers("jobs_changed")
+
+            # Réinitialiser les jobs non terminés pour éviter les jobs orphelins (état running/paused assigné à un serveur disparu)
+            for job in self.jobs:
+                if job.get_overall_status() not in ["done", "cancelled", "error", "pending"]:
+                    for out in job.outputs:
+                        if out.status not in ["done", "cancelled", "error"]:
+                            out.status = "pending"
+                    job.is_cancelled = False
+            # Sauvegarder immédiatement la file mise à jour si des changements ont été faits
+            self.save_queue()
+
+        except (json.JSONDecodeError, TypeError, KeyError) as e:
+            self.logger.error(f"Erreur lors du chargement de la file d'attente: {e}. La file sera vide.")
+            self.jobs = []
+
+    def save_queue(self, file_path: Path = Path("queue.json")):
+        """Sauvegarde la file d'attente dans un fichier JSON"""
+        jobs_to_save = [
+            job for job in self.jobs
+            if job.get_overall_status() not in ["done", "cancelled", "error"]
+        ]
+        try:
+            with file_path.open('w', encoding='utf-8') as f:
+                json.dump([job.to_dict() for job in jobs_to_save], f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            self.logger.error(f"Erreur lors de la sauvegarde de la file d'attente: {e}")
+
     def register_observer(self, observer: Callable):
         """Enregistre un observateur pour les changements d'état"""
         if observer not in self._observers:
@@ -54,27 +105,43 @@ class AppState:
 
     def notify_observers(self, change_type: str = "general"):
         """Notifie tous les observateurs d'un changement d'état"""
-        self.logger.debug(f"Notification des observateurs: {change_type} ({len(self._observers)} observateurs)")
-        for observer in self._observers[:]:  # Copie pour éviter les modifications pendant l'itération
+        self.logger.info(f"📢 APPSTATE: Notification des observateurs: {change_type} ({len(self._observers)} observateurs)")
+        for i, observer in enumerate(self._observers[:]):  # Copie pour éviter les modifications pendant l'itération
             try:
+                self.logger.info(f"📞 APPSTATE: Appel observateur {i+1}/{len(self._observers)}: {observer}")
                 if hasattr(observer, '__call__'):
                     observer(change_type=change_type)
+                    self.logger.info(f"✅ APPSTATE: Observateur {i+1} appelé avec succès")
                 else:
-                    self.logger.warning(f"Observateur non callable: {observer}")
+                    self.logger.warning(f"⚠️ APPSTATE: Observateur non callable: {observer}")
             except Exception as e:
-                self.logger.error(f"Erreur lors de la notification de l'observateur {observer}: {e}", exc_info=True)
+                self.logger.error(f"💥 APPSTATE: Erreur lors de la notification de l'observateur {observer}: {e}", exc_info=True)
 
     # Méthodes pour la gestion des jobs
     def add_job(self, job: EncodeJob):
         """Ajoute un job à la liste"""
+        self.logger.info(f"📝 APPSTATE: Ajout job {job.job_id} - {job.src_path.name}")
         self.jobs.append(job)
-        self.notify_observers("jobs_changed")
+        self.logger.info(f"📊 APPSTATE: Total jobs maintenant: {len(self.jobs)}")
+        
+        try:
+            self.save_queue()
+            self.logger.info(f"💾 APPSTATE: Queue sauvegardée")
+        except Exception as e:
+            self.logger.error(f"💥 APPSTATE: Erreur sauvegarde queue: {e}", exc_info=True)
+        
+        try:
+            self.notify_observers("jobs_changed")
+            self.logger.info(f"📢 APPSTATE: Observateurs notifiés (jobs_changed)")
+        except Exception as e:
+            self.logger.error(f"💥 APPSTATE: Erreur notification observateurs: {e}", exc_info=True)
 
     def remove_job(self, job_id: str):
         """Supprime un job par son ID"""
         self.jobs = [job for job in self.jobs if job.job_id != job_id]
         if job_id in self.selected_job_ids:
             self.selected_job_ids.remove(job_id)
+        self.save_queue()
         self.notify_observers("jobs_changed")
 
     def get_job_by_id(self, job_id: str) -> Optional[EncodeJob]:
@@ -85,6 +152,7 @@ class AppState:
         """Vide la liste des jobs"""
         self.jobs.clear()
         self.selected_job_ids.clear()
+        self.save_queue()
         self.notify_observers("jobs_changed")
 
     def get_jobs_by_status(self, status: str) -> List[EncodeJob]:
@@ -142,6 +210,7 @@ class AppState:
         # Appliquer les paramètres au premier output
         output_cfg = job.outputs[0]
         output_cfg.encoder = self.global_encoder
+        output_cfg.codec = self.global_codec
         output_cfg.container = self.global_container
         output_cfg.quality = self.global_quality
         output_cfg.preset = self.global_preset
