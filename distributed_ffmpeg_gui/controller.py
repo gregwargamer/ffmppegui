@@ -199,29 +199,25 @@ class DistributedController:
         self.gui.log_message(f"Added {len(self.task_queue)} files to the queue.")
         self.gui.update_task_list(self.get_task_status())
 
-    def allocate_tasks(self):
-        """Assigns all queued tasks to the optimal servers."""
-        self.gui.log_message("Allocating tasks to servers...")
+    def reserve_tasks(self):
+        """Reserves all queued tasks on the optimal servers."""
+        self.gui.log_message("Reserving tasks on servers...")
         with self.lock:
             if not self.task_queue:
-                self.gui.log_message("No tasks in queue to allocate.")
+                self.gui.log_message("No tasks in queue to reserve.")
                 return
 
             tasks_to_remove_from_queue = []
             for task in self.task_queue:
                 target_server_key = self.select_optimal_server()
                 if not target_server_key:
-                    self.gui.log_message("No available servers to allocate tasks. Aborting.")
-                    break # Stop trying if no servers are available
+                    self.gui.log_message("No available servers to reserve tasks. Aborting.")
+                    break
 
                 connector = self.servers[target_server_key]["connector"]
                 task['server_key'] = target_server_key
                 
-                # Prepare payload
                 try:
-                    with open(task['input_path'], 'rb') as f:
-                        file_data = f.read()
-
                     output_filename = os.path.basename(task['input_path'])
                     base, _ = os.path.splitext(output_filename)
                     codec = self.gui.codec_var.get().lower()
@@ -229,62 +225,93 @@ class DistributedController:
                     output_filename = f"{base}.{extension}"
 
                     payload = {
-                        "type": "ALLOCATE_TASK",
+                        "type": "RESERVE_TASK",
                         "task_id": task['id'],
-                        "filename": os.path.basename(task['input_path']),
-                        "file_data": file_data.hex(),
                         "codec": codec,
                         "quality": self.gui.quality_var.get(),
                         "bitrate": self.gui.bitrate_var.get(),
                         "output_filename": output_filename
                     }
                 except Exception as e:
-                    self.gui.log_message(f"Failed to prepare task {task['id']}: {e}")
+                    self.gui.log_message(f"Failed to prepare reservation for task {task['id']}: {e}")
                     continue
 
-                # This is a blocking call, which is OK for this user-triggered action.
-                response = connector.allocate_task(payload)
+                response = connector.reserve_task(payload)
 
                 if response and response.get("status") == "SUCCESS":
-                    task['status'] = 'Allocated'
+                    task['status'] = 'Reserved'
                     self.active_tasks[task['id']] = task
                     self.servers[target_server_key]['allocated_tasks'] += 1
                     tasks_to_remove_from_queue.append(task)
-                    self.gui.log_message(f"Allocated {os.path.basename(task['input_path'])} to {target_server_key}.")
+                    self.gui.log_message(f"Reserved {os.path.basename(task['input_path'])} on {target_server_key}.")
                 else:
-                    self.gui.log_message(f"Failed to allocate task to {target_server_key}: {response.get('message', 'No response')}")
+                    self.gui.log_message(f"Failed to reserve task on {target_server_key}: {response.get('message', 'No response')}")
             
-            # Remove allocated tasks from the main queue
             self.task_queue = [t for t in self.task_queue if t not in tasks_to_remove_from_queue]
 
         self.gui.update_task_list(self.get_task_status())
         self.gui.update_server_list(self.get_server_status())
 
     def start_processing(self):
-        """Sends the START command to all servers with allocated tasks."""
-        self.gui.log_message("Sending START command to servers...")
-        servers_to_start = set()
+        """Streams the file data for each reserved task to its assigned server."""
+        self.gui.log_message("Starting encoding process...")
         with self.lock:
-            for task_id, task in self.active_tasks.items():
-                if task['status'] == 'Allocated':
-                    servers_to_start.add(task['server_key'])
-                    task['status'] = 'Encoding' # Optimistically update status
-        
-        if not servers_to_start:
-            self.gui.log_message("No allocated tasks to start.")
+            # Create a copy of tasks to process to avoid issues with modifying dict during iteration
+            tasks_to_process = [task for task in self.active_tasks.values() if task.get('status') == 'Reserved']
+
+        if not tasks_to_process:
+            self.gui.log_message("No reserved tasks to start.")
             return
 
-        for server_key in servers_to_start:
-            with self.lock:
-                connector = self.servers.get(server_key, {}).get("connector")
-            if connector:
-                success = connector.start_encoding()
-                if success:
-                    self.gui.log_message(f"START command sent to {server_key}.")
-                else:
-                    self.gui.log_message(f"Failed to send START command to {server_key}.")
+        for task in tasks_to_process:
+            # Start each file transfer and encoding in its own thread
+            threading.Thread(target=self._stream_and_encode_task, args=(task,), daemon=True).start()
+
+    def _stream_and_encode_task(self, task):
+        """Reads a file and sends it to the server for encoding."""
+        task_id = task['id']
+        server_key = task['server_key']
         
-        self.gui.update_task_list(self.get_task_status())
+        with self.lock:
+            connector = self.servers.get(server_key, {}).get("connector")
+            if not connector:
+                self.gui.log_message(f"Cannot start task {task_id}: connector for {server_key} not found.")
+                return
+
+        try:
+            self.gui.log_message(f"Streaming {os.path.basename(task['input_path'])} to {server_key}...")
+            with open(task['input_path'], 'rb') as f:
+                file_data = f.read()
+
+            payload = {
+                "type": "ENCODE_TASK",
+                "task_id": task_id,
+                "file_data": file_data.hex(),
+                "filename": os.path.basename(task['input_path']) # Send filename for temp file on server
+            }
+            
+            # Optimistically update status in the GUI
+            with self.lock:
+                if task_id in self.active_tasks:
+                    self.active_tasks[task_id]['status'] = 'Encoding'
+            self.gui.update_task_list(self.get_task_status())
+
+            # Send the file data to the server
+            success = connector.encode_task(payload)
+            if not success:
+                self.gui.log_message(f"Failed to send file data for task {task_id} to {server_key}.")
+                # Revert status if sending failed
+                with self.lock:
+                    if task_id in self.active_tasks:
+                        self.active_tasks[task_id]['status'] = 'Reserved'
+                self.gui.update_task_list(self.get_task_status())
+
+        except Exception as e:
+            self.gui.log_message(f"Error streaming task {task_id}: {e}")
+            with self.lock:
+                if task_id in self.active_tasks:
+                    self.active_tasks[task_id]['status'] = 'Error'
+            self.gui.update_task_list(self.get_task_status())
     
     def select_optimal_server(self):
         """Finds the server with the lowest load ratio."""

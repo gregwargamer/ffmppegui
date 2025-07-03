@@ -2,6 +2,8 @@ import socket
 import json
 import logging
 import threading
+import selectors
+from collections import deque
 
 class ServerConnector:
     """Handles all TCP communication for a single server connection."""
@@ -15,7 +17,12 @@ class ServerConnector:
         self._buffer = ""
         self.is_connected = False
         self.listener_thread = None
-        self.lock = threading.Lock()
+        self.send_queue = deque()
+        self.selector = selectors.DefaultSelector()
+        self.io_thread = None
+        self.send_queue = deque()
+        self._buffer = ""
+        self.is_connected = False
 
     def connect(self):
         """Establishes a connection, performs handshake, and starts listener thread."""
@@ -23,7 +30,8 @@ class ServerConnector:
             self.socket = socket.create_connection((self.host, self.port), self.timeout)
             self.is_connected = True
             
-            hello_data = self._receive_json()
+            # Perform handshake with blocking I/O
+            hello_data = self._receive_json_blocking()
             if hello_data and hello_data.get("type") == "HELLO":
                 self.server_info = {
                     "ip": self.host,
@@ -33,9 +41,9 @@ class ServerConnector:
                     "status": "Connected"
                 }
                 logging.info(f"Handshake complete with {self.host}:{self.port}")
-                # Start listener thread
-                self.listener_thread = threading.Thread(target=self._listen_for_results, daemon=True)
-                self.listener_thread.start()
+                # Start I/O thread after successful handshake
+                self.io_thread = threading.Thread(target=self._handle_io_events, daemon=True)
+                self.io_thread.start()
                 return self.server_info
             else:
                 logging.error(f"Handshake failed with {self.host}:{self.port}. Unexpected response: {hello_data}")
@@ -46,55 +54,67 @@ class ServerConnector:
             self.disconnect()
             return None
 
-    def allocate_task(self, task_payload):
-        """Sends a task for allocation and waits for acknowledgment."""
+    def reserve_task(self, task_payload):
+        """Sends a task for reservation and waits for acknowledgment."""
         if not self.is_connected:
             return {"status": "ERROR", "message": "Not connected"}
 
         try:
-            with self.lock:
-                self._send_json(task_payload)
-                response = self._receive_json() # Should be ACK_ALLOCATE
-            return response
+            self._send_json_blocking(task_payload)
+            return self._receive_json_blocking()  # Should be ACK_RESERVE
         except Exception as e:
-            logging.error(f"Error during task allocation with {self.host}:{self.port}: {e}")
+            logging.error(f"Error during task reservation with {self.host}:{self.port}: {e}")
             self.disconnect() # Connection is likely broken
             return {"status": "ERROR", "message": str(e)}
 
-    def start_encoding(self):
-        """Sends the fire-and-forget command to start all allocated tasks."""
+    def encode_task(self, task_payload):
+        """Sends the full task with file data to be encoded immediately."""
         if not self.is_connected:
             return False
         
         try:
-            with self.lock:
-                self._send_json({"type": "START_ENCODING"})
+            self.send_queue.append(('command', task_payload))
             return True
         except Exception as e:
-            logging.error(f"Error sending START command to {self.host}:{self.port}: {e}")
+            logging.error(f"Error sending ENCODE_TASK command to {self.host}:{self.port}: {e}")
             self.disconnect()
             return False
 
-    def _listen_for_results(self):
-        """Dedicated thread for receiving asynchronous results from the server."""
-        while self.is_connected:
-            try:
-                result = self._receive_json()
-                if result:
-                    # Pass the result back to the controller for handling
-                    self.controller.handle_server_response(result, f"{self.host}:{self.port}")
-                else:
-                    # If receive returns None, connection is closed
-                    logging.info(f"Listener thread for {self.host}:{self.port} detected disconnect.")
-                    self.disconnect()
-                    break
-            except json.JSONDecodeError:
-                logging.warning(f"Received malformed JSON from {self.host}:{self.port}. Ignoring.")
-            except Exception as e:
-                if self.is_connected: # Avoid logging errors during a normal disconnect
-                    logging.error(f"Listener thread for {self.host}:{self.port} encountered an error: {e}")
-                self.disconnect() # Ensure cleanup
-                break
+    def _handle_io_events(self):
+        """Handles I/O using selector for non-blocking multiplexing."""
+        try:
+            self.socket.setblocking(False)
+            self.selector.register(self.socket, selectors.EVENT_READ | selectors.EVENT_WRITE)
+            while self.is_connected:
+                events = self.selector.select(timeout=1)
+                for key, mask in events:
+                    if mask & selectors.EVENT_READ:
+                        data = self.socket.recv(4096)
+                        if data:
+                            self._buffer += data.decode('utf-8')
+                            while '\n' in self._buffer:
+                                message, self._buffer = self._buffer.split('\n', 1)
+                                try:
+                                    result = json.loads(message)
+                                    self.controller.handle_server_response(result, f"{self.host}:{self.port}")
+                                except json.JSONDecodeError:
+                                    logging.warning(f"Received malformed JSON from {self.host}:{self.port}")
+                        else:
+                            self.disconnect()
+                            break
+                    if mask & selectors.EVENT_WRITE and self.send_queue:
+                        msg_type, payload = self.send_queue.popleft()
+                        message = json.dumps(payload) + '\n'
+                        try:
+                            sent = self.socket.send(message.encode('utf-8'))
+                            if sent == 0:
+                                self.disconnect()
+                                break
+                        except BlockingIOError:
+                            self.send_queue.appendleft((msg_type, payload))
+        except Exception as e:
+            logging.error(f"I/O handler error: {e}")
+            self.disconnect()
 
     def send_task_and_get_result(self, task_payload):
         """Sends a single task and waits for a single result (blocking)."""
@@ -125,10 +145,26 @@ class ServerConnector:
             # Notify controller of the disconnection
             self.controller.handle_server_disconnect(f"{self.host}:{self.port}")
 
-    def _send_json(self, data):
-        """Appends a newline and sends the JSON-encoded data."""
+    def _send_json_blocking(self, data):
+        """Sends JSON data immediately (blocking)."""
         message = json.dumps(data) + '\n'
         self.socket.sendall(message.encode('utf-8'))
+
+    def _receive_json_blocking(self):
+        """Blocking receive for handshake and critical operations."""
+        while '\n' not in self._buffer:
+            chunk = self.socket.recv(4096)
+            if not chunk:
+                self.is_connected = False
+                return None
+            self._buffer += chunk.decode('utf-8')
+        
+        message, self._buffer = self._buffer.split('\n', 1)
+        return json.loads(message)
+        
+    def _send_json(self, data):
+        """Queues JSON data for async sending."""
+        self.send_queue.append(('response', data))
 
     def _receive_json(self):
         """Reads from the socket until a newline is found, then decodes the JSON."""
@@ -144,4 +180,4 @@ class ServerConnector:
                  return None
         
         message, self._buffer = self._buffer.split('\n', 1)
-        return json.loads(message) 
+        return json.loads(message)

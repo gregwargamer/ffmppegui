@@ -13,7 +13,6 @@ class MainApp:
         self.setup_ui()
         self.controller = controller.DistributedController(self)
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
-        self.root.mainloop()
     
     def on_closing(self):
         """Handle window closing event."""
@@ -107,7 +106,7 @@ class MainApp:
         ttk.Button(action_frame, text="Start Scan", command=self.start_scan).grid(row=0, column=0, padx=5)
         self.add_to_queue_button = ttk.Button(action_frame, text="Add All to Queue", command=self.add_to_queue, state=tk.DISABLED)
         self.add_to_queue_button.grid(row=0, column=1, padx=5)
-        self.allocate_button = ttk.Button(action_frame, text="Allocate Tasks", command=self.allocate_tasks, state=tk.DISABLED)
+        self.allocate_button = ttk.Button(action_frame, text="Reserve Tasks", command=self.reserve_tasks, state=tk.DISABLED)
         self.allocate_button.grid(row=0, column=2, padx=5)
         self.start_button = ttk.Button(action_frame, text="Start Encoding", command=self.start_all, state=tk.DISABLED)
         self.start_button.grid(row=0, column=3, padx=5)
@@ -237,7 +236,7 @@ class MainApp:
             self.task_tree.insert("", "end", iid=task.get('id'), values=(os.path.basename(task['input_path']), "Queued", "N/A"))
         for task_id, task in task_status.get('active', {}).items():
             assigned_server = task.get('server_key', 'N/A')
-            status = "Encoding" if task.get('status') == 'Encoding' else 'Allocated'
+            status = "Encoding" if task.get('status') == 'Encoding' else 'Reserved'
             self.task_tree.insert("", "end", iid=task_id, values=(os.path.basename(task['input_path']), status, assigned_server))
 
         # --- Button State Logic ---
@@ -255,9 +254,18 @@ class MainApp:
         """Adds all scanned files to the processing queue."""
         self.controller.add_scanned_to_queue()
 
-    def allocate_tasks(self):
-        """Assigns queued tasks to available servers."""
-        self.controller.allocate_tasks()
+    def reserve_tasks(self):
+        """Reserves queued tasks on available servers in a background thread."""
+        self.allocate_button.config(state=tk.DISABLED)
+        threading.Thread(target=self._reserve_and_reenable, daemon=True).start()
+
+    def _reserve_and_reenable(self):
+        """Helper to run reservation and then re-enable the button."""
+        try:
+            self.controller.reserve_tasks()
+        finally:
+            # Ensure the button is re-enabled even if an error occurs
+            self.root.after(0, self._update_task_list_threadsafe, self.controller.get_task_status())
 
     def start_all(self):
         """Starts the encoding process on all servers."""
@@ -271,4 +279,9 @@ if __name__ == "__main__":
     if sys.platform in ["darwin", "win32"]:
         multiprocessing.set_start_method('spawn', force=True)
         
-    app = MainApp() 
+    app = MainApp()
+    try:
+        app.root.mainloop()
+    except KeyboardInterrupt:
+        print("\nCaught keyboard interrupt, shutting down.")
+        app.on_closing()

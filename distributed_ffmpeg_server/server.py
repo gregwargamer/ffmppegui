@@ -87,12 +87,12 @@ class EncodingServer:
                     break
                 
                 req_type = request.get("type")
-                if req_type == "ALLOCATE_TASK":
-                    logging.info(f"Received allocation request for task {request.get('task_id')} from {addr}")
-                    self.handle_allocation(client, request)
-                elif req_type == "START_ENCODING":
-                    logging.info(f"Received START command from {addr}")
-                    self.start_all_tasks(client)
+                if req_type == "RESERVE_TASK":
+                    logging.info(f"Received reservation request for task {request.get('task_id')} from {addr}")
+                    self.handle_reservation(client, request)
+                elif req_type == "ENCODE_TASK":
+                    logging.info(f"Received encoding request for task {request.get('task_id')} from {addr}")
+                    self.handle_encoding_request(client, request)
                 else:
                     logging.warning(f"Received unknown message type from {addr}: {req_type}")
         except Exception as e:
@@ -101,38 +101,40 @@ class EncodingServer:
             client.close()
             del self.client_sockets[addr]
 
-    def handle_allocation(self, client, task_data):
+    def handle_reservation(self, client, task_data):
         task_id = task_data.get('task_id')
         if not task_id:
-            self._send_json(client, {"type": "ACK_ALLOCATE", "task_id": None, "status": "ERROR", "message": "Missing task_id"})
+            self._send_json(client, {"type": "ACK_RESERVE", "task_id": None, "status": "ERROR", "message": "Missing task_id"})
             return
 
         with self.lock:
-            # Check for overall capacity, not just running tasks
             if (len(self.allocated_tasks) + self.active_tasks) >= self.max_threads:
-                logging.warning(f"Allocation rejected for task {task_id}. Server at capacity.")
-                self._send_json(client, {"type": "ACK_ALLOCATE", "task_id": task_id, "status": "ERROR", "message": "Server at capacity"})
+                logging.warning(f"Reservation rejected for task {task_id}. Server at capacity.")
+                self._send_json(client, {"type": "ACK_RESERVE", "task_id": task_id, "status": "ERROR", "message": "Server at capacity"})
                 return
 
+            # Store the task metadata, excluding file data
             self.allocated_tasks[task_id] = task_data
-            logging.info(f"Task {task_id} allocated. Total allocated: {len(self.allocated_tasks)}")
-            self._send_json(client, {"type": "ACK_ALLOCATE", "task_id": task_id, "status": "SUCCESS"})
+            logging.info(f"Task {task_id} reserved. Total reserved: {len(self.allocated_tasks)}")
+            self._send_json(client, {"type": "ACK_RESERVE", "task_id": task_id, "status": "SUCCESS"})
 
-    def start_all_tasks(self, client):
-        """Starts processing all allocated tasks."""
+    def handle_encoding_request(self, client, task_data):
+        task_id = task_data.get('task_id')
         with self.lock:
-            tasks_to_start = list(self.allocated_tasks.keys())
-            if not tasks_to_start:
-                logging.info("START command received, but no tasks to start.")
-                return
+            # Pop the reserved task metadata
+            reserved_task = self.allocated_tasks.pop(task_id, None)
 
-        logging.info(f"Starting {len(tasks_to_start)} tasks.")
-        for task_id in tasks_to_start:
-            with self.lock:
-                task_data = self.allocated_tasks.pop(task_id, None)
-            if task_data:
-                # Pass the original client socket to send the final result back
-                threading.Thread(target=self.process_task, args=(client, task_data), daemon=True).start()
+        if not reserved_task:
+            logging.error(f"Received ENCODE_TASK for an unknown or already started task: {task_id}")
+            # We can't send an error back easily without the original client socket info
+            return
+
+        # Combine the reserved metadata with the new file data
+        full_task = reserved_task
+        full_task['file_data'] = task_data['file_data']
+        
+        # Start the actual encoding process in a new thread
+        threading.Thread(target=self.process_task, args=(client, full_task), daemon=True).start()
     
     def process_task(self, client, task):
         task_id = task.get("task_id", str(uuid.uuid4()))
@@ -146,12 +148,13 @@ class EncodingServer:
         logging.info(f"Starting task {task_id}. Active tasks: {self.active_tasks}")
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
-                input_path = os.path.join(tmpdir, task["filename"])
+                # The filename for the temporary file is now in the full_task payload
+                input_path = os.path.join(tmpdir, full_task["output_filename"])
                 with open(input_path, "wb") as f:
-                    f.write(bytes.fromhex(task["file_data"]))
+                    f.write(bytes.fromhex(full_task["file_data"]))
                 
-                output_path = os.path.join(tmpdir, task["output_filename"])
-                cmd = self.build_ffmpeg_cmd(input_path, output_path, task)
+                output_path = os.path.join(tmpdir, full_task["output_filename"])
+                cmd = self.build_ffmpeg_cmd(input_path, output_path, full_task)
                 
                 logging.info(f"Executing FFmpeg for task {task_id}: {' '.join(cmd)}")
                 result = subprocess.run(cmd, capture_output=True, text=True, check=False)
