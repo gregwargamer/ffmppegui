@@ -1,1 +1,0 @@
-# Ce package contient les modules partagés entre le GUI et le serveur 
