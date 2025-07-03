@@ -207,7 +207,6 @@ class DistributedController:
                 self.gui.log_message("No tasks in queue to reserve.")
                 return
 
-            tasks_to_remove_from_queue = []
             for task in self.task_queue:
                 target_server_key = self.select_optimal_server()
                 if not target_server_key:
@@ -232,22 +231,23 @@ class DistributedController:
                         "bitrate": self.gui.bitrate_var.get(),
                         "output_filename": output_filename
                     }
+                    
+                    # Send reservation without waiting for immediate ACK
+                    success = connector.reserve_task(payload)
+                    if success:
+                        # Optimistically move task to active and update GUI
+                        task['status'] = 'Reserving' # A new transient status
+                        self.active_tasks[task['id']] = task
+                        self.servers[target_server_key]['allocated_tasks'] += 1
+                        self.gui.log_message(f"Sent reservation for {os.path.basename(task['input_path'])} to {target_server_key}.")
+                    else:
+                        self.gui.log_message(f"Failed to send reservation for {task['id']} to {target_server_key}.")
+
                 except Exception as e:
                     self.gui.log_message(f"Failed to prepare reservation for task {task['id']}: {e}")
-                    continue
-
-                response = connector.reserve_task(payload)
-
-                if response and response.get("status") == "SUCCESS":
-                    task['status'] = 'Reserved'
-                    self.active_tasks[task['id']] = task
-                    self.servers[target_server_key]['allocated_tasks'] += 1
-                    tasks_to_remove_from_queue.append(task)
-                    self.gui.log_message(f"Reserved {os.path.basename(task['input_path'])} on {target_server_key}.")
-                else:
-                    self.gui.log_message(f"Failed to reserve task on {target_server_key}: {response.get('message', 'No response')}")
             
-            self.task_queue = [t for t in self.task_queue if t not in tasks_to_remove_from_queue]
+            # Clear the queue now that reservations have been sent
+            self.task_queue.clear()
 
         self.gui.update_task_list(self.get_task_status())
         self.gui.update_server_list(self.get_server_status())
@@ -338,9 +338,28 @@ class DistributedController:
             return best_server_key
 
     def handle_server_response(self, result, server_key):
-        """Handles asynchronous messages (RESULT, ERROR) from a server."""
+        """Handles asynchronous messages (RESULT, ERROR, ACK_RESERVE) from a server."""
         task_id = result.get('task_id')
         if not task_id:
+            return
+
+        if result.get('type') == 'ACK_RESERVE':
+            with self.lock:
+                task = self.active_tasks.get(task_id)
+                if task:
+                    if result.get('status') == 'SUCCESS':
+                        task['status'] = 'Reserved'
+                        self.gui.log_message(f"Reservation confirmed for {os.path.basename(task['input_path'])} on {server_key}.")
+                    else:
+                        self.gui.log_message(f"Reservation failed for {task_id} on {server_key}: {result.get('message')}")
+                        # Re-queue the task
+                        task['status'] = 'Queued'
+                        self.task_queue.insert(0, task)
+                        del self.active_tasks[task_id]
+                        if server_key in self.servers:
+                            self.servers[server_key]['allocated_tasks'] = max(0, self.servers[server_key]['allocated_tasks'] - 1)
+            self.gui.update_task_list(self.get_task_status())
+            self.gui.update_server_list(self.get_server_status())
             return
 
         with self.lock:

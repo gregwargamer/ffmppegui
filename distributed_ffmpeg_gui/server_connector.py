@@ -55,17 +55,16 @@ class ServerConnector:
             return None
 
     def reserve_task(self, task_payload):
-        """Sends a task for reservation and waits for acknowledgment."""
+        """Sends a task for reservation without waiting for acknowledgment."""
         if not self.is_connected:
-            return {"status": "ERROR", "message": "Not connected"}
-
+            return False
         try:
-            self._send_json_blocking(task_payload)
-            return self._receive_json_blocking()  # Should be ACK_RESERVE
+            self.send_queue.append(('command', task_payload))
+            return True
         except Exception as e:
-            logging.error(f"Error during task reservation with {self.host}:{self.port}: {e}")
-            self.disconnect() # Connection is likely broken
-            return {"status": "ERROR", "message": str(e)}
+            logging.error(f"Error sending RESERVE_TASK command to {self.host}:{self.port}: {e}")
+            self.disconnect()
+            return False
 
     def encode_task(self, task_payload):
         """Sends the full task with file data to be encoded immediately."""

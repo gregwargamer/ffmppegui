@@ -236,7 +236,7 @@ class MainApp:
             self.task_tree.insert("", "end", iid=task.get('id'), values=(os.path.basename(task['input_path']), "Queued", "N/A"))
         for task_id, task in task_status.get('active', {}).items():
             assigned_server = task.get('server_key', 'N/A')
-            status = "Encoding" if task.get('status') == 'Encoding' else 'Reserved'
+            status = task.get('status', 'Unknown')
             self.task_tree.insert("", "end", iid=task_id, values=(os.path.basename(task['input_path']), status, assigned_server))
 
         # --- Button State Logic ---
