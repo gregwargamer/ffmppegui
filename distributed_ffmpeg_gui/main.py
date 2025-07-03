@@ -3,6 +3,8 @@ from tkinter import ttk, filedialog, simpledialog
 import controller
 import threading
 import os
+import multiprocessing
+import sys
 
 class MainApp:
     def __init__(self):
@@ -102,7 +104,13 @@ class MainApp:
         # --- Action Buttons ---
         action_frame = ttk.Frame(main_frame, padding="10")
         action_frame.grid(row=6, column=0, columnspan=3, sticky="e")
-        ttk.Button(action_frame, text="Start Scan", command=self.start_scan).grid(row=0, column=0)
+        ttk.Button(action_frame, text="Start Scan", command=self.start_scan).grid(row=0, column=0, padx=5)
+        self.add_to_queue_button = ttk.Button(action_frame, text="Add All to Queue", command=self.add_to_queue, state=tk.DISABLED)
+        self.add_to_queue_button.grid(row=0, column=1, padx=5)
+        self.allocate_button = ttk.Button(action_frame, text="Allocate Tasks", command=self.allocate_tasks, state=tk.DISABLED)
+        self.allocate_button.grid(row=0, column=2, padx=5)
+        self.start_button = ttk.Button(action_frame, text="Start Encoding", command=self.start_all, state=tk.DISABLED)
+        self.start_button.grid(row=0, column=3, padx=5)
 
     def browse_input(self):
         path = filedialog.askdirectory()
@@ -120,10 +128,6 @@ class MainApp:
         self.log_text.insert(tk.END, message + "\n")
         self.log_text.see(tk.END)
 
-    def update_queue_view(self):
-        # Placeholder for updating a future task queue view
-        self.log_message("Task queue has been updated.")
-        
     def start_scan(self):
         """Kicks off the input folder scan."""
         self.log_message("Scanning input folder...")
@@ -226,11 +230,45 @@ class MainApp:
 
     def _update_task_list_threadsafe(self, task_status):
         self.task_tree.delete(*self.task_tree.get_children())
-        # The task_status will be a combined list of queued and active tasks
-        for task in task_status['queued']:
+        # The task_status will be a combined list of scanned, queued and active tasks
+        for task in task_status.get('scanned', []):
+            self.task_tree.insert("", "end", iid=task.get('id'), values=(os.path.basename(task['input_path']), "Scanned", "N/A"))
+        for task in task_status.get('queued', []):
             self.task_tree.insert("", "end", iid=task.get('id'), values=(os.path.basename(task['input_path']), "Queued", "N/A"))
-        for task_id, task in task_status['active'].items():
-            self.task_tree.insert("", "end", iid=task_id, values=(os.path.basename(task['input_path']), "Encoding", task.get('server_key', 'N/A')))
+        for task_id, task in task_status.get('active', {}).items():
+            assigned_server = task.get('server_key', 'N/A')
+            status = "Encoding" if task.get('status') == 'Encoding' else 'Allocated'
+            self.task_tree.insert("", "end", iid=task_id, values=(os.path.basename(task['input_path']), status, assigned_server))
+
+        # --- Button State Logic ---
+        scanned_empty = not task_status.get('scanned')
+        queue_empty = not task_status.get('queued')
+        active_empty = not task_status.get('active')
+
+        self.add_to_queue_button.config(state=tk.NORMAL if not scanned_empty else tk.DISABLED)
+        self.allocate_button.config(state=tk.NORMAL if not queue_empty else tk.DISABLED)
+        # Enable start if there are active (allocated) tasks and they are not all already encoding
+        can_start = not active_empty and any(t.get('status') != 'Encoding' for t in task_status['active'].values())
+        self.start_button.config(state=tk.NORMAL if can_start else tk.DISABLED)
+
+    def add_to_queue(self):
+        """Adds all scanned files to the processing queue."""
+        self.controller.add_scanned_to_queue()
+
+    def allocate_tasks(self):
+        """Assigns queued tasks to available servers."""
+        self.controller.allocate_tasks()
+
+    def start_all(self):
+        """Starts the encoding process on all servers."""
+        self.controller.start_processing()
 
 if __name__ == "__main__":
+    # On macOS and Windows, 'spawn' is the default and safest start method.
+    # Explicitly setting it at the entry point of the application can resolve
+    # obscure initialization errors when scripts are launched from a GUI
+    # or via a wrapper script.
+    if sys.platform in ["darwin", "win32"]:
+        multiprocessing.set_start_method('spawn', force=True)
+        
     app = MainApp() 

@@ -20,6 +20,8 @@ class EncodingServer:
         self.active_tasks = 0
         self.max_threads = os.cpu_count()
         self.lock = threading.Lock()
+        self.allocated_tasks = {} # task_id -> task_data
+        self.client_sockets = {} # addr -> socket for async results
         self._buffer = ""
 
     def start(self):
@@ -41,6 +43,7 @@ class EncodingServer:
         while True:
             client, addr = self.socket.accept()
             logging.info(f"Accepted connection from {addr}")
+            self.client_sockets[addr] = client
             threading.Thread(target=self.handle_client, args=(client, addr), daemon=True).start()
 
     def _send_json(self, client_socket, data):
@@ -78,20 +81,58 @@ class EncodingServer:
             })
             
             while True:
-                task = self._receive_json(client)
-                if task is None:
+                request = self._receive_json(client)
+                if request is None:
                     logging.info(f"Client {addr} disconnected.")
                     break
                 
-                if task.get("type") == "TASK":
-                    logging.info(f"Received task {task.get('task_id')} from {addr}")
-                    self.process_task(client, task)
+                req_type = request.get("type")
+                if req_type == "ALLOCATE_TASK":
+                    logging.info(f"Received allocation request for task {request.get('task_id')} from {addr}")
+                    self.handle_allocation(client, request)
+                elif req_type == "START_ENCODING":
+                    logging.info(f"Received START command from {addr}")
+                    self.start_all_tasks(client)
                 else:
-                    logging.warning(f"Received unknown message type from {addr}: {task.get('type')}")
+                    logging.warning(f"Received unknown message type from {addr}: {req_type}")
         except Exception as e:
             logging.error(f"An error occurred with client {addr}: {e}")
         finally:
             client.close()
+            del self.client_sockets[addr]
+
+    def handle_allocation(self, client, task_data):
+        task_id = task_data.get('task_id')
+        if not task_id:
+            self._send_json(client, {"type": "ACK_ALLOCATE", "task_id": None, "status": "ERROR", "message": "Missing task_id"})
+            return
+
+        with self.lock:
+            # Check for overall capacity, not just running tasks
+            if (len(self.allocated_tasks) + self.active_tasks) >= self.max_threads:
+                logging.warning(f"Allocation rejected for task {task_id}. Server at capacity.")
+                self._send_json(client, {"type": "ACK_ALLOCATE", "task_id": task_id, "status": "ERROR", "message": "Server at capacity"})
+                return
+
+            self.allocated_tasks[task_id] = task_data
+            logging.info(f"Task {task_id} allocated. Total allocated: {len(self.allocated_tasks)}")
+            self._send_json(client, {"type": "ACK_ALLOCATE", "task_id": task_id, "status": "SUCCESS"})
+
+    def start_all_tasks(self, client):
+        """Starts processing all allocated tasks."""
+        with self.lock:
+            tasks_to_start = list(self.allocated_tasks.keys())
+            if not tasks_to_start:
+                logging.info("START command received, but no tasks to start.")
+                return
+
+        logging.info(f"Starting {len(tasks_to_start)} tasks.")
+        for task_id in tasks_to_start:
+            with self.lock:
+                task_data = self.allocated_tasks.pop(task_id, None)
+            if task_data:
+                # Pass the original client socket to send the final result back
+                threading.Thread(target=self.process_task, args=(client, task_data), daemon=True).start()
     
     def process_task(self, client, task):
         task_id = task.get("task_id", str(uuid.uuid4()))
@@ -143,10 +184,13 @@ class EncodingServer:
     def build_ffmpeg_cmd(self, input_path, output_path, task):
         codec = task["codec"].lower()
         
-        # Base command with '-y' to overwrite existing files in temp dir if needed
+        # Base command with '-y' to overwrite, and '-i' for input
         base_cmd = ["ffmpeg", "-y", "-i", input_path]
         
-        # Codec-specific parameters
+        # Map all streams from the input. This is key for preserving album art.
+        base_cmd += ["-map", "0"]
+        
+        # Define the audio codec based on user selection
         if codec == "aac":
             bitrate = task.get("bitrate", 256)
             base_cmd += ["-c:a", "aac", "-b:a", f"{bitrate}k"]
@@ -166,8 +210,12 @@ class EncodingServer:
         else:
             raise ValueError(f"Unsupported codec: {codec}")
 
-        # Add output path and copy video stream if present
-        base_cmd += ["-c:v", "copy", output_path]
+        # For all other stream types (video for album art, subtitles), copy them without re-encoding.
+        # This is more robust than just copying the video stream.
+        base_cmd += ["-c:v", "copy", "-c:s", "copy"]
+        
+        # Add the output path at the very end.
+        base_cmd.append(output_path)
         return base_cmd
 
 if __name__ == "__main__":

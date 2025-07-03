@@ -1,10 +1,14 @@
 import sys
 import os
 
-# Add the server directory to the Python path to allow importing EncodingServer
-server_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'distributed_ffmpeg_server'))
-if server_path not in sys.path:
-    sys.path.insert(0, server_path)
+# --- Path Setup ---
+# This is crucial for the multiprocessing context on macOS/Windows.
+# It ensures the new process can find the 'server' module.
+_gui_dir = os.path.dirname(__file__)
+_server_dir = os.path.abspath(os.path.join(_gui_dir, '..', 'distributed_ffmpeg_server'))
+if _server_dir not in sys.path:
+    sys.path.insert(0, _server_dir)
+# --- End Path Setup ---
 
 from server import EncodingServer  # type: ignore
 

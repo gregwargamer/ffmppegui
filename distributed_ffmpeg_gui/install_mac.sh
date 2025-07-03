@@ -23,15 +23,22 @@ pip install -r requirements.txt
 deactivate
 
 echo "--- Creating application launcher ---"
-# Create app launcher that works regardless of where it's clicked from
-LAUNCHER_CONTENT="#!/bin/bash
-# Get the absolute path of the directory containing this script
-DIR=\$(cd \"\$(dirname \"\${BASH_SOURCE[0]}\")\" &> /dev/null && pwd)
-# Activate the virtual environment and launch the Python GUI application
-source \"\$DIR/venv/bin/activate\"
-python \"\$DIR/main.py\""
+# Use a 'here document' (cat <<'EOF') to create the launcher script.
+# This is the most robust way to write a multi-line script to a file,
+# as it avoids all issues with character escaping.
+cat <<'EOF' > launch_gui.command
+#!/bin/bash
+# Get the absolute path of the directory where this script is located.
+DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
 
-echo "$LAUNCHER_CONTENT" > launch_gui.command
+# Change to that directory. This is the most important step.
+cd "$DIR" || exit
+
+# Now that we are in the correct directory, source the venv and run Python.
+source venv/bin/activate
+python main.py
+EOF
+
 chmod +x launch_gui.command
 
 echo "--- Installation Complete ---"
