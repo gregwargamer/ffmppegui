@@ -57,12 +57,14 @@ class ServerConnector:
     def reserve_task(self, task_payload):
         """Sends a task for reservation without waiting for acknowledgment."""
         if not self.is_connected:
+            logging.warning(f"Attempted to reserve task on disconnected server {self.host}:{self.port}")
             return False
         try:
             self.send_queue.append(('command', task_payload))
+            logging.info(f"Queued RESERVE_TASK for {task_payload.get('task_id')} to {self.host}:{self.port}. Queue size: {len(self.send_queue)}")
             return True
         except Exception as e:
-            logging.error(f"Error sending RESERVE_TASK command to {self.host}:{self.port}: {e}")
+            logging.error(f"Error queuing RESERVE_TASK command to {self.host}:{self.port}: {e}")
             self.disconnect()
             return False
 
@@ -95,7 +97,7 @@ class ServerConnector:
                                 message, self._buffer = self._buffer.split('\n', 1)
                                 try:
                                     result = json.loads(message)
-                                    self.controller.handle_server_response(result, f"{self.host}:{self.port}")
+                                    self.controller.handle_server_response(result, self.server_info.get("name", f"{self.host}:{self.port}"))
                                 except json.JSONDecodeError:
                                     logging.warning(f"Received malformed JSON from {self.host}:{self.port}")
                         else:
@@ -104,13 +106,21 @@ class ServerConnector:
                     if mask & selectors.EVENT_WRITE and self.send_queue:
                         msg_type, payload = self.send_queue.popleft()
                         message = json.dumps(payload) + '\n'
+                        logging.info(f"Attempting to send {msg_type} message for task {payload.get('task_id')} to {self.host}:{self.port}. Message size: {len(message)} bytes.")
                         try:
                             sent = self.socket.send(message.encode('utf-8'))
                             if sent == 0:
+                                logging.warning(f"Socket send returned 0 bytes. Disconnecting from {self.host}:{self.port}.")
                                 self.disconnect()
                                 break
+                            logging.info(f"Successfully sent {sent} bytes for {msg_type} message to {self.host}:{self.port}.")
                         except BlockingIOError:
+                            logging.warning(f"BlockingIOError when sending {msg_type} message to {self.host}:{self.port}. Re-queueing.")
                             self.send_queue.appendleft((msg_type, payload))
+                        except Exception as e:
+                            logging.error(f"Error sending {msg_type} message to {self.host}:{self.port}: {e}")
+                            self.disconnect()
+                            break
         except Exception as e:
             logging.error(f"I/O handler error: {e}")
             self.disconnect()

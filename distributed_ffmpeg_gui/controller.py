@@ -33,6 +33,10 @@ class DistributedController:
         self.active_tasks = {}  # { "task_id": task_info }
         self.lock = threading.Lock()
         self.is_running = True
+        
+        # Start timeout checker thread
+        self.timeout_thread = threading.Thread(target=self._check_timeouts, daemon=True)
+        self.timeout_thread.start()
 
         self.load_config()
         self.start_integrated_server()
@@ -48,6 +52,10 @@ class DistributedController:
                     server["connector"].disconnect()
         if hasattr(self, 'local_server_process') and self.local_server_process.is_alive():
             self.local_server_process.terminate()
+        
+        # Wait for timeout thread to exit
+        if hasattr(self, 'timeout_thread') and self.timeout_thread.is_alive():
+            self.timeout_thread.join(timeout=2)
 
     def start_integrated_server(self):
         # The integrated server prints its ready message to stdout.
@@ -207,6 +215,7 @@ class DistributedController:
                 self.gui.log_message("No tasks in queue to reserve.")
                 return
 
+            successfully_sent_for_reservation = []
             for task in self.task_queue:
                 target_server_key = self.select_optimal_server()
                 if not target_server_key:
@@ -237,8 +246,10 @@ class DistributedController:
                     if success:
                         # Optimistically move task to active and update GUI
                         task['status'] = 'Reserving' # A new transient status
+                        task['reserved_at'] = time.time()  # Track reservation time
                         self.active_tasks[task['id']] = task
                         self.servers[target_server_key]['allocated_tasks'] += 1
+                        successfully_sent_for_reservation.append(task) # Collect successful tasks
                         self.gui.log_message(f"Sent reservation for {os.path.basename(task['input_path'])} to {target_server_key}.")
                     else:
                         self.gui.log_message(f"Failed to send reservation for {task['id']} to {target_server_key}.")
@@ -246,8 +257,13 @@ class DistributedController:
                 except Exception as e:
                     self.gui.log_message(f"Failed to prepare reservation for task {task['id']}: {e}")
             
-            # Clear the queue now that reservations have been sent
-            self.task_queue.clear()
+            # Remove only successfully sent tasks from the queue
+            self.task_queue = [t for t in self.task_queue if t not in successfully_sent_for_reservation]
+            
+            if successfully_sent_for_reservation:
+                self.gui.log_message(f"Sent {len(successfully_sent_for_reservation)} tasks for reservation.")
+            else:
+                self.gui.log_message("No tasks were successfully sent for reservation.")
 
         self.gui.update_task_list(self.get_task_status())
         self.gui.update_server_list(self.get_server_status())
@@ -349,6 +365,9 @@ class DistributedController:
                 if task:
                     if result.get('status') == 'SUCCESS':
                         task['status'] = 'Reserved'
+                        # Remove timeout tracking on successful reservation
+                        if 'reserved_at' in task:
+                            del task['reserved_at']
                         self.gui.log_message(f"Reservation confirmed for {os.path.basename(task['input_path'])} on {server_key}.")
                     else:
                         self.gui.log_message(f"Reservation failed for {task_id} on {server_key}: {result.get('message')}")
@@ -430,3 +449,32 @@ class DistributedController:
 
         self.gui.update_task_list(self.get_task_status())
         self.gui.update_server_list(self.get_server_status()) 
+        
+    def _check_timeouts(self):
+        """Periodically checks for reservation timeouts."""
+        while self.is_running:
+            time.sleep(10)  # Check every 10 seconds
+            now = time.time()
+            tasks_to_requeue = []
+            
+            with self.lock:
+                for task_id, task in list(self.active_tasks.items()):
+                    if task.get('status') == 'Reserving' and 'reserved_at' in task:
+                        if now - task['reserved_at'] > 30:  # 30 second timeout
+                            tasks_to_requeue.append(task)
+                            del self.active_tasks[task_id]
+                            
+                            # Decrement server allocation
+                            server_key = task.get('server_key')
+                            if server_key in self.servers:
+                                self.servers[server_key]['allocated_tasks'] = max(
+                                    0, self.servers[server_key]['allocated_tasks'] - 1)
+            
+            if tasks_to_requeue:
+                with self.lock:
+                    for task in tasks_to_requeue:
+                        task['status'] = 'Queued'
+                        self.task_queue.insert(0, task)
+                self.gui.log_message(f"Re-queued {len(tasks_to_requeue)} tasks due to reservation timeout")
+                self.gui.update_task_list(self.get_task_status())
+                self.gui.update_server_list(self.get_server_status())
