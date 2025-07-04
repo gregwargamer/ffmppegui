@@ -110,31 +110,22 @@ class EncodeServer:
         self.logger.info(f"👋 Client connecté: {client_addr} (ID: {client_id})")
         
         try:
-            # Le client attend un HELLO, mais notre protocole est que le serveur envoie directement ses infos.
-            # On attend le HELLO du client avant d'envoyer nos infos.
-            self.logger.debug(f"Attente du message HELLO du client {client_id}")
-            
-            # Le client envoie HELLO juste après la connexion.
-            # On doit donc lire ce premier message ici.
-            try:
-                raw_message = await asyncio.wait_for(websocket.recv(), timeout=10)
-                message = Message.from_json(raw_message)
-                if message.type == MessageType.HELLO:
-                    client_name = message.data.get("client_name", "Inconnu")
-                    self.logger.info(f"Message HELLO reçu du client {client_id} ({client_name})")
-                else:
-                    self.logger.warning(f"Premier message n'était pas HELLO (reçu: {message.type}). On continue quand même.")
-            except asyncio.TimeoutError:
-                self.logger.error(f"Timeout en attente du HELLO du client {client_id}. Fermeture connexion.")
-                return
-            except Exception as e:
-                self.logger.error(f"Erreur en lisant le message HELLO du client {client_id}: {e}", exc_info=True)
-                return
-
-
+            # Protocole corrigé: 1. Le serveur envoie SERVER_INFO. 2. Le client répond avec HELLO.
             self.logger.debug(f"Envoi des informations du serveur au client {client_id}")
             await self.send_server_info(websocket)
-            self.logger.info(f"Informations du serveur envoyées avec succès au client {client_id}")
+            self.logger.info(f"Informations du serveur envoyées. Attente du HELLO du client {client_id}.")
+
+            try:
+                hello_message = await asyncio.wait_for(receive_message(websocket), timeout=10)
+                if hello_message.type == MessageType.HELLO:
+                    client_name = hello_message.data.get("client_name", "Inconnu")
+                    self.logger.info(f"Message HELLO reçu du client {client_id} ({client_name}). Handshake complet.")
+                else:
+                    self.logger.warning(f"Message inattendu au lieu de HELLO: {hello_message.type}. Fermeture.")
+                    return
+            except (asyncio.TimeoutError, ProtocolError) as e:
+                self.logger.error(f"Erreur durant le handshake: {e}. Fermeture.")
+                return
             
             async for raw_message in websocket:
                 try:

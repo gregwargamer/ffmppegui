@@ -7,6 +7,7 @@ import time
 
 from shared.protocol import Message, MessageType, send_message, receive_message, ProtocolError
 from shared.messages import ServerInfo, ServerCapabilities, ServerStatus, JobConfiguration, JobProgress, JobResult, JobStatus
+from shared.data_utils import safe_dataclass_from_dict
 from core.settings import Settings
 
 class DistributedClient:
@@ -32,35 +33,16 @@ class DistributedClient:
             self.active_connections[uri] = websocket
             self.logger.info(f"Connecté au serveur: {uri}. Envoi du message HELLO.")
 
-            # Envoyer un message HELLO pour initier la communication
-            hello_msg = Message(MessageType.HELLO, {"client_name": "FFmpegEasyGUI"})
-            self.logger.debug(f"Envoi du HELLO: {hello_msg.to_json()}")
-            await send_message(websocket, hello_msg)
-
-            # Attendre les informations du serveur
-            self.logger.debug(f"Attente de la réponse SERVER_INFO de {uri}")
-            response = await asyncio.wait_for(receive_message(websocket), timeout=5)
-            self.logger.debug(f"Réponse reçue de {uri}: type={response.type}")
-
+            # Protocole corrigé: 1. Recevoir SERVER_INFO. 2. Envoyer HELLO.
+            response = await asyncio.wait_for(receive_message(websocket), timeout=10)
+            
             if response.type == MessageType.SERVER_INFO:
-                self.logger.debug(f"Données SERVER_INFO brutes: {response.data}")
-                # Créer l'objet ServerCapabilities à partir du dictionnaire
-                caps_data = response.data['capabilities']
-                capabilities = ServerCapabilities(**caps_data)
-                
-                # Créer l'objet ServerInfo avec le bon status enum
-                server_info = ServerInfo(
-                    server_id=response.data['server_id'],
-                    name=response.data['name'],
-                    ip=ip,
-                    port=port,
-                    status=ServerStatus(response.data['status']),
-                    capabilities=capabilities,
-                    max_jobs=response.data['max_jobs'],
-                    current_jobs=response.data['current_jobs'],
-                    uptime=response.data['uptime'],
-                    last_seen=response.data['last_seen']
-                )
+                hello_msg = Message(MessageType.HELLO, {"client_name": "FFmpegEasyGUI"})
+                await send_message(websocket, hello_msg)
+
+                server_info = safe_dataclass_from_dict(ServerInfo, response.data)
+                server_info.ip = ip
+                server_info.port = port
                 self.servers[server_info.server_id] = server_info
                 self.logger.info(f"Informations serveur reçues de {uri}: {server_info.name}")
                 self.logger.debug(f"Détails du serveur: {server_info}")
@@ -154,44 +136,20 @@ class DistributedClient:
         if message.type == MessageType.SERVER_INFO:
             ip, port_str = uri.replace("ws://", "").split(":")
             port = int(port_str)
-            # Créer l'objet ServerCapabilities à partir du dictionnaire
-            caps_data = message.data['capabilities']
-            capabilities = ServerCapabilities(**caps_data)
             
-            # Créer l'objet ServerInfo avec le bon status enum
-            server_info = ServerInfo(
-                server_id=message.data['server_id'],
-                name=message.data['name'],
-                ip=ip,
-                port=port,
-                status=ServerStatus(message.data['status']),  # Convertir string en enum
-                capabilities=capabilities,
-                max_jobs=message.data['max_jobs'],
-                current_jobs=message.data['current_jobs'],
-                uptime=message.data['uptime'],
-                last_seen=message.data['last_seen']
-            )
+            server_info = safe_dataclass_from_dict(ServerInfo, message.data)
+            server_info.ip = ip
+            server_info.port = port
             self.servers[server_info.server_id] = server_info
             self.logger.info(f"Mise à jour infos serveur: {server_info.name} ({server_info.status.value})")
         
         elif message.type == MessageType.JOB_PROGRESS:
-            progress = JobProgress(**message.data)
+            progress = safe_dataclass_from_dict(JobProgress, message.data)
             if progress.job_id in self.job_progress_callbacks:
                 await self.job_progress_callbacks[progress.job_id](progress)
         
         elif message.type == MessageType.JOB_COMPLETED or message.type == MessageType.JOB_FAILED:
-            # Créer l'objet JobResult avec le bon status enum
-            result = JobResult(
-                job_id=message.data['job_id'],
-                status=JobStatus(message.data['status']),  # Convertir string en enum
-                output_file=message.data['output_file'],
-                file_size=message.data['file_size'],
-                duration=message.data['duration'],
-                average_fps=message.data['average_fps'],
-                error_message=message.data['error_message'],
-                server_id=message.data['server_id'],
-                completed_at=message.data['completed_at']
-            )
+            result = safe_dataclass_from_dict(JobResult, message.data)
             if result.job_id in self.job_completion_callbacks:
                 await self.job_completion_callbacks[result.job_id](result)
             # Nettoyer les callbacks après complétion

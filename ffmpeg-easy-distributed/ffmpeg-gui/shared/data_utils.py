@@ -20,7 +20,6 @@ def safe_dataclass_from_dict(cls: Type[T], data: Dict[str, Any]) -> T:
         return cls()
 
     kwargs = {}
-    cls_fields = {f.name: f for f in inspect.getfullargspec(cls.__init__).args if f != 'self'}
 
     for name, field_type in cls.__annotations__.items():
         if name not in data:
@@ -49,7 +48,7 @@ def safe_dataclass_from_dict(cls: Type[T], data: Dict[str, Any]) -> T:
             kwargs[name] = value
 
     # Check for extraneous data
-    extra_keys = set(data.keys()) - set(cls_fields.keys())
+    extra_keys = set(data.keys()) - set(cls.__annotations__.keys())
     if extra_keys:
         logger.debug(f"Extraneous keys in data for {cls.__name__}: {extra_keys}")
 
