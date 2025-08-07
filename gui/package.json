@@ -9,6 +9,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "pino": "^9.3.2",
     "@fastify/multipart": "^8.3.0",
     "@fastify/static": "^7.0.2",
     "@fastify/websocket": "^7.0.1",
@@ -17,9 +18,10 @@
     "uuid": "^9.0.1"
   },
   "devDependencies": {
+    "@types/mime-types": "^3.0.1",
     "@types/node": "^20.12.7",
+    "@types/uuid": "^9.0.7",
     "tsx": "^4.16.2",
-    "typescript": "^5.5.4",
-    "@types/uuid": "^9.0.7"
+    "typescript": "^5.5.4"
   }
 }

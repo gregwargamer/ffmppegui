@@ -1,0 +1,17 @@
+body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
+section { border: 1px solid #ddd; padding: 12px; margin: 12px 0; border-radius: 8px; }
+label { margin-right: 8px; }
+input, select { margin: 4px; }
+button { margin: 4px; }
+body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, sans-serif; background: #0b0b0b; color: #eaeaea; }
+.container { max-width: 960px; margin: 24px auto; padding: 0 16px; }
+h1 { font-size: 22px; margin: 8px 0 16px; }
+h2 { font-size: 16px; margin: 0 0 12px; }
+.panel { background: #151515; border: 1px solid #2a2a2a; padding: 12px; margin-bottom: 16px; border-radius: 8px; }
+.row { display: flex; align-items: center; gap: 12px; margin: 8px 0; }
+label { width: 200px; }
+input[type=text], input[type=number], select { flex: 1; padding: 8px; background: #0f0f0f; color: #eaeaea; border: 1px solid #2d2d2d; border-radius: 6px; }
+button { padding: 8px 14px; background: #3b82f6; color: white; border: 0; border-radius: 6px; cursor: pointer; }
+button:disabled { background: #444; cursor: default; }
+table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+th, td { border: 1px solid #2a2a2a; padding: 6px; text-align: left; }

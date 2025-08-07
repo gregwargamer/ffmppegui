@@ -1,0 +1,173 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Distributed FFmpeg GUI</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <h1>Distributed FFmpeg</h1>
+    <section>
+      <h2>Pair Agent</h2>
+      <input id="pairToken" placeholder="25-char token" />
+      <button id="btnPair">Pair</button>
+    </section>
+    <section>
+      <h2>Paths</h2>
+      <div>
+        <label>Input root</label>
+        <input id="inputRoot" />
+        <button id="pickInput">Pick…</button>
+      </div>
+      <div>
+        <label>Output root</label>
+        <input id="outputRoot" />
+        <button id="pickOutput">Pick…</button>
+      </div>
+      <div>
+        <label><input type="checkbox" id="recursive" checked /> Recursive</label>
+        <label><input type="checkbox" id="mirror" checked /> Mirror</label>
+      </div>
+    </section>
+    <section>
+      <h2>Encoding</h2>
+      <div>
+        <label>Media</label>
+        <select id="mediaType">
+          <option value="audio">audio</option>
+          <option value="video">video</option>
+          <option value="image">image</option>
+        </select>
+        <label>Codec</label>
+        <select id="codec"></select>
+      </div>
+      <div id="rowPreset">
+        <label>Preset</label>
+        <select id="preset">
+          <option>veryslow</option>
+          <option>slower</option>
+          <option>slow</option>
+          <option selected>medium</option>
+          <option>fast</option>
+          <option>faster</option>
+          <option>veryfast</option>
+        </select>
+      </div>
+      <div id="rowCrf">
+        <label>CRF</label>
+        <input id="crf" type="number" value="23" />
+      </div>
+      <div id="rowBitrate">
+        <label>Bitrate</label>
+        <input id="bitrate" value="192k" />
+      </div>
+      <div>
+        <button id="btnScan">Scan</button>
+        <button id="btnStart" disabled>Start</button>
+      </div>
+      <div id="scanSummary"></div>
+    </section>
+    <section>
+      <h2>Nodes</h2>
+      <pre id="nodes"></pre>
+    </section>
+    <script src="/app.js"></script>
+  </body>
+  </html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Distributed FFmpeg Controller</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>Distributed FFmpeg Controller</h1>
+
+    <section class="panel">
+      <h2>Pair Agent</h2>
+      <div class="row">
+        <label>Controller public URL</label>
+        <input id="publicUrl" type="text" placeholder="http://<your-ip>:4000" />
+      </div>
+      <div class="row">
+        <label>Pairing code</label>
+        <input id="pairToken" type="text" placeholder="paste 25-char code" />
+        <button id="pairBtn">Pair</button>
+      </div>
+      <div class="row"><small>Enter the URL this GUI is reachable at, paste the pairing code printed by the agent installer, and press Pair. Nodes are remembered.</small></div>
+    </section>
+
+    <section class="panel">
+      <h2>Paths</h2>
+      <div class="row">
+        <label>Input root path</label>
+        <input id="inputRoot" type="text" placeholder="/Users/you/Videos" />
+        <button id="pickInput">Pick…</button>
+        <button id="uploadLocal">Upload files…</button>
+      </div>
+      <div class="row">
+        <label>Output root path</label>
+        <input id="outputRoot" type="text" placeholder="/Users/you/Output" />
+        <button id="pickOutput">Pick…</button>
+      </div>
+      <div class="row">
+        <label><input id="recursive" type="checkbox" checked /> Recursive</label>
+        <label><input id="mirror" type="checkbox" checked /> Mirror directory structure</label>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Media & Codec</h2>
+      <div class="row">
+        <label>Media type</label>
+        <select id="mediaType">
+          <option value="audio">Audio</option>
+          <option value="video">Video</option>
+          <option value="image">Image</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>Codec</label>
+        <select id="codec"></select>
+      </div>
+      <div class="row" id="qualityRow">
+        <label>CRF/Quality</label>
+        <input id="crf" type="number" min="0" max="63" value="23" />
+      </div>
+      <div class="row" id="bitrateRow" style="display:none">
+        <label>Bitrate</label>
+        <input id="bitrate" type="text" placeholder="192k" />
+      </div>
+      <div class="row" id="presetRow">
+        <label>Preset</label>
+        <select id="preset">
+          <option value="veryslow">veryslow</option>
+          <option value="slower">slower</option>
+          <option value="slow">slow</option>
+          <option value="medium" selected>medium</option>
+          <option value="fast">fast</option>
+          <option value="faster">faster</option>
+          <option value="veryfast">veryfast</option>
+        </select>
+      </div>
+      <div class="row">
+        <button id="scanBtn">Scan</button>
+        <button id="startBtn" disabled>Start</button>
+      </div>
+      <div class="row">
+        <div id="scanSummary"></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Nodes</h2>
+      <div id="nodes"></div>
+    </section>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
