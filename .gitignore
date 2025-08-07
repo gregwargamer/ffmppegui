@@ -1,3 +1,21 @@
+# OS/IDE
+.DS_Store
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+gui_py/.venv/
+gui_py/logs/
+
+# Node
+node_modules/
+**/dist/
+logs/
+
+# Misc
+*.log
 node_modules
 **/dist
 *.log
