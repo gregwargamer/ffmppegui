@@ -1,23 +1,5 @@
-# Ignore temporary files and directories
-/tmp/
-
-# Ignore Python virtual environments by name
-venv/
-venv-gui/
-venv-server/
-
-# Python cache
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# IDE and editor specific files
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# OS specific files
+node_modules
+**/dist
+*.log
 .DS_Store
-Thumbs.db
+.env
