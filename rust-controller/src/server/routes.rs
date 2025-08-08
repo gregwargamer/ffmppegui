@@ -130,6 +130,14 @@ pub struct StartPayload { pub jobs: Vec<crate::jobs::PlanJob> }
 //soumission de jobs et mise en file d'attente
 pub async fn start(State(state): State<Arc<AppState>>, Json(body): Json<StartPayload>) -> impl IntoResponse {
     if body.jobs.is_empty() { return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"no jobs"}))).into_response(); }
+    for pj in &body.jobs {
+        if pj.source_path.trim().is_empty() || pj.output_path.trim().is_empty() || pj.codec.trim().is_empty() { 
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"invalid job"}))).into_response();
+        }
+        if !std::path::Path::new(&pj.source_path).exists() {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"missing source"}))).into_response();
+        }
+    }
     let mut ids = Vec::new();
     let now = chrono::Utc::now().timestamp_millis();
     for pj in body.jobs {

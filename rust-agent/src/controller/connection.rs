@@ -144,7 +144,16 @@ async fn handle_lease(cfg: &AgentConfig, tx: mpsc::UnboundedSender<String>, job_
     }
 
     //attente fin de ffmpeg
-    let status = child.wait().await?;
+    //attente avec timeout global de job
+    let status = match tokio::time::timeout(Duration::from_secs(cfg.job_timeout_secs), child.wait()).await {
+        Ok(res) => res?,
+        Err(_) => {
+            let _ = child.kill().await;
+            let msg = serde_json::json!({"type":"complete","payload":{"jobId": job_id, "agentId": format!("{}-{}", hostname::get()?.to_string_lossy(), std::process::id()), "success": false}}).to_string();
+            let _ = tx.send(msg);
+            return Ok(())
+        }
+    };
     if !status.success() {
         let msg = serde_json::json!({"type":"complete","payload":{"jobId": job_id, "agentId": format!("{}-{}", hostname::get()?.to_string_lossy(), std::process::id()), "success": false}}).to_string();
         let _ = tx.send(msg);
@@ -152,12 +161,23 @@ async fn handle_lease(cfg: &AgentConfig, tx: mpsc::UnboundedSender<String>, job_
     }
 
     //upload du résultat
-    let client = reqwest::Client::new();
-    let file = tokio::fs::File::open(&tmp_out).await?;
-    let size = file.metadata().await?.len();
-    let stream = reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::new(file));
-    let resp = client.put(&output_url).header(reqwest::header::CONTENT_LENGTH, size).body(stream).send().await?;
-    if !resp.status().is_success() {
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(cfg.request_connect_timeout_secs))
+        .timeout(Duration::from_secs(cfg.request_timeout_secs))
+        .build()?;
+    let mut attempt: u32 = 0;
+    let mut uploaded = false;
+    while attempt < cfg.upload_max_retries {
+        attempt += 1;
+        let file = tokio::fs::File::open(&tmp_out).await?;
+        let size = file.metadata().await?.len();
+        let stream = reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::new(file));
+        match client.put(&output_url).header(reqwest::header::CONTENT_LENGTH, size).body(stream).send().await {
+            Ok(resp) if resp.status().is_success() => { uploaded = true; break; }
+            _ => { tokio::time::sleep(Duration::from_secs(2)).await; }
+        }
+    }
+    if !uploaded {
         let msg = serde_json::json!({"type":"complete","payload":{"jobId": job_id, "agentId": format!("{}-{}", hostname::get()?.to_string_lossy(), std::process::id()), "success": false}}).to_string();
         let _ = tx.send(msg);
         return Ok(())

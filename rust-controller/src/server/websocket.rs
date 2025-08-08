@@ -45,7 +45,7 @@ async fn handle_agent_socket(state: Arc<AppState>, socket: WebSocket) {
                     match val.get("type").and_then(|v| v.as_str()) {
                         Some("register") => {
                             let token_ok = if let Some(token) = val.pointer("/payload/token").and_then(|v| v.as_str()) {
-                                state.allowed_tokens.read().await.contains(token)
+                                token.len() == 25 && state.allowed_tokens.read().await.contains(token)
                             } else { false };
                             if !token_ok { let _ = tx.send("{\"type\":\"error\",\"error\":\"unauthorized\"}".to_string()); break; }
                             let id = val.pointer("/payload/id").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| Uuid::new_v4().to_string());

@@ -18,6 +18,14 @@ struct Cli {
     concurrency: u32,
     #[arg(long, env = "FFMPEG_PATH", default_value = "ffmpeg")]
     ffmpeg_path: String,
+    #[arg(long, env = "JOB_TIMEOUT_SECS", default_value_t = 3600)]
+    job_timeout_secs: u64,
+    #[arg(long, env = "UPLOAD_MAX_RETRIES", default_value_t = 3)]
+    upload_max_retries: u32,
+    #[arg(long, env = "REQ_CONNECT_TIMEOUT_SECS", default_value_t = 10)]
+    request_connect_timeout_secs: u64,
+    #[arg(long, env = "REQ_TIMEOUT_SECS", default_value_t = 900)]
+    request_timeout_secs: u64,
 }
 
 //point d'entrée asynchrone
@@ -36,6 +44,10 @@ async fn main() -> anyhow::Result<()> {
         token: cli.token,
         concurrency: cli.concurrency,
         ffmpeg_path: cli.ffmpeg_path,
+        job_timeout_secs: cli.job_timeout_secs,
+        upload_max_retries: cli.upload_max_retries,
+        request_connect_timeout_secs: cli.request_connect_timeout_secs,
+        request_timeout_secs: cli.request_timeout_secs,
     };
 
     //lancement de la boucle principale (connexion contrôleur)
