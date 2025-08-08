@@ -26,6 +26,10 @@ struct Cli {
     request_connect_timeout_secs: u64,
     #[arg(long, env = "REQ_TIMEOUT_SECS", default_value_t = 900)]
     request_timeout_secs: u64,
+    #[arg(long, env = "HEARTBEAT_INTERVAL_SECS", default_value_t = 10)]
+    heartbeat_interval_secs: u64,
+    #[arg(long, env = "MAX_LOCAL_CONCURRENCY", default_value_t = (num_cpus::get() as u32))]
+    max_local_concurrency: u32,
 }
 
 //point d'entrée asynchrone
@@ -48,6 +52,8 @@ async fn main() -> anyhow::Result<()> {
         upload_max_retries: cli.upload_max_retries,
         request_connect_timeout_secs: cli.request_connect_timeout_secs,
         request_timeout_secs: cli.request_timeout_secs,
+        heartbeat_interval_secs: cli.heartbeat_interval_secs,
+        max_local_concurrency: cli.max_local_concurrency,
     };
 
     //lancement de la boucle principale (connexion contrôleur)

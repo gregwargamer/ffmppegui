@@ -1,8 +1,9 @@
 //construction du routeur HTTP principal
-use axum::{routing::{get, post, put}, Router};
+use axum::{routing::{get, post, put, options}, Router};
 use std::sync::Arc;
 
 use crate::state::AppState;
+use tower_http::cors::CorsLayer;
 
 mod routes;
 mod websocket;
@@ -19,8 +20,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/pair", post(routes::pair_post))
         .route("/api/scan", post(routes::scan))
         .route("/api/start", post(routes::start))
+        .route("/api/*rest", options(routes::options_ok))
         .route("/stream/input/:jobId", get(routes::stream_input))
         .route("/stream/output/:jobId", put(routes::stream_output))
+        .route("/stream/*rest", options(routes::options_ok))
         .route("/agent", get(websocket::agent_ws_upgrade))
+        .route("/agent", options(routes::options_ok))
         .with_state(state)
+        .layer(CorsLayer::permissive())
 }

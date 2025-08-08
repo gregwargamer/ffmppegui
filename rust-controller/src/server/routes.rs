@@ -22,6 +22,9 @@ pub async fn health() -> impl IntoResponse {
     "ok"
 }
 
+//réponse OPTIONS générique (CORS)
+pub async fn options_ok() -> impl IntoResponse { StatusCode::NO_CONTENT }
+
 //liste des nœuds (agents)
 pub async fn nodes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let list: Vec<AgentInfo> = state.agents.read().await.values().cloned().collect();

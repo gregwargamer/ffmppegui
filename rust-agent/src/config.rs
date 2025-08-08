@@ -9,4 +9,6 @@ pub struct AgentConfig {
     pub upload_max_retries: u32,
     pub request_connect_timeout_secs: u64,
     pub request_timeout_secs: u64,
+    pub heartbeat_interval_secs: u64,
+    pub max_local_concurrency: u32,
 }

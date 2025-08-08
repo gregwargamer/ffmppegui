@@ -93,7 +93,7 @@ async fn heartbeat_loop(cfg: AgentConfig, tx: mpsc::UnboundedSender<String>) {
         });
         //envoi au canal socket
         if tx.send(msg.to_string()).is_err() { break; }
-        sleep(Duration::from_secs(10)).await;
+        sleep(Duration::from_secs(cfg.heartbeat_interval_secs)).await;
     }
 }
 
