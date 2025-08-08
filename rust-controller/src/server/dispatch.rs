@@ -48,6 +48,12 @@ pub async fn try_dispatch(state: Arc<AppState>) {
             let _ = tx.send(payload);
             //incrémenter activeJobs
             if let Some(info) = state.agents.write().await.get_mut(&agent_id) { info.active_jobs += 1; }
+            //mettre à jour l'état du job
+            if let Some(job) = state.jobs.write().await.get_mut(&job_id) {
+                job.status = "assigned".to_string();
+                job.node_id = Some(agent_id.clone());
+                job.updated_at = chrono::Utc::now().timestamp_millis();
+            }
             made_progress = true;
         } else {
             //pas de canal: remettre en file
