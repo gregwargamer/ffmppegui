@@ -6,6 +6,7 @@ use url::Url;
 use uuid::Uuid;
 use sysinfo::SystemExt;
 use tokio::time::{sleep, Duration};
+use tokio::process::Command;
 
 //boucle réseau principale
 pub async fn run_agent_connection(cfg: &AgentConfig) -> anyhow::Result<()> {
@@ -33,15 +34,27 @@ pub async fn run_agent_connection(cfg: &AgentConfig) -> anyhow::Result<()> {
     ws.send(Message::Text(reg.to_string())).await?;
 
     //boucle heartbeats
-    tokio::spawn(heartbeat_loop(cfg.clone(), ws.split().0));
+    let (mut sink, mut stream) = ws.split();
+    tokio::spawn(heartbeat_loop(cfg.clone(), sink.clone()));
 
     //réception
-    while let Some(msg) = ws.next().await {
+    while let Some(msg) = stream.next().await {
         match msg {
             Ok(Message::Text(text)) => {
                 tracing::debug!(%text, "controller message");
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
+                    if val.get("type").and_then(|v| v.as_str()) == Some("lease") {
+                        let p = val.get("payload").cloned().unwrap_or_default();
+                        let job_id = p.get("jobId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let input_url = p.get("inputUrl").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let output_url = p.get("outputUrl").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let ffmpeg_args: Vec<String> = p.get("ffmpegArgs").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
+                        let output_ext = p.get("outputExt").and_then(|v| v.as_str()).unwrap_or(".out").to_string();
+                        let _ = handle_lease(cfg, &mut sink, job_id, input_url, output_url, ffmpeg_args, output_ext).await;
+                    }
+                }
             }
-            Ok(Message::Ping(p)) => { let _ = ws.send(Message::Pong(p)).await; }
+            Ok(Message::Ping(p)) => { /* ping/pong géré automatiquement par le serveur */ }
             Ok(Message::Close(_)) => break,
             _ => {}
         }
@@ -59,6 +72,49 @@ async fn heartbeat_loop(cfg: AgentConfig, mut sink: impl futures::Sink<Message, 
         if sink.send(Message::Text(msg.to_string())).await.is_err() { break; }
         sleep(Duration::from_secs(10)).await;
     }
+}
+
+//traitement d'un lease: exécuter ffmpeg et uploader
+async fn handle_lease(cfg: &AgentConfig, sink: &mut (impl futures::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin), job_id: String, input_url: String, output_url: String, ffmpeg_args: Vec<String>, output_ext: String) -> anyhow::Result<()> {
+    use tokio::fs;
+    use tokio::io::AsyncReadExt;
+    use tokio::io::AsyncWriteExt;
+    use reqwest::Client;
+    use std::path::PathBuf;
+
+    //dossier temporaire
+    let tmp_dir = std::env::temp_dir().join("ffmpegeasy");
+    fs::create_dir_all(&tmp_dir).await.ok();
+    let tmp_out = tmp_dir.join(format!("{}{}", job_id, output_ext));
+
+    //lancement de ffmpeg
+    let mut cmd = Command::new(&cfg.ffmpeg_path);
+    cmd.arg("-i").arg(&input_url);
+    for a in ffmpeg_args { cmd.arg(a); }
+    cmd.arg(&tmp_out);
+    let status = cmd.status().await?;
+    if !status.success() {
+        let msg = serde_json::json!({"type":"complete","payload":{"jobId": job_id, "agentId": format!("{}-{}", hostname::get()?.to_string_lossy(), std::process::id()), "success": false}}).to_string();
+        let _ = sink.send(Message::Text(msg)).await;
+        return Ok(())
+    }
+
+    //upload
+    let client = Client::new();
+    let file = fs::File::open(&tmp_out).await?;
+    let size = file.metadata().await?.len();
+    let stream = reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::new(file));
+    let resp = client.put(&output_url).header(reqwest::header::CONTENT_LENGTH, size).body(stream).send().await?;
+    if !resp.status().is_success() {
+        let msg = serde_json::json!({"type":"complete","payload":{"jobId": job_id, "agentId": format!("{}-{}", hostname::get()?.to_string_lossy(), std::process::id()), "success": false}}).to_string();
+        let _ = sink.send(Message::Text(msg)).await;
+        return Ok(())
+    }
+    let msg = serde_json::json!({"type":"complete","payload":{"jobId": job_id, "agentId": format!("{}-{}", hostname::get()?.to_string_lossy(), std::process::id()), "success": true}}).to_string();
+    let _ = sink.send(Message::Text(msg)).await;
+    //nettoyage
+    let _ = fs::remove_file(&tmp_out).await;
+    Ok(())
 }
 
 //détection simple des encodeurs via `ffmpeg -hide_banner -encoders`
