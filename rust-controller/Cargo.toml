@@ -18,3 +18,4 @@ tower-http = { version = "0.5", features = ["cors", "trace"] }
 anyhow = "1.0"
 futures = "0.3"
 urlencoding = "2.1"
+walkdir = "2.5"

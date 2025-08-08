@@ -8,6 +8,7 @@ pub async fn try_dispatch(state: Arc<AppState>) {
     let mut made_progress = true;
     while made_progress {
         made_progress = false;
+        //tri simple: LIFO pour l'instant (peut évoluer en tri par taille)
         let next_job_id_opt = { state.pending_jobs.write().await.pop() };
         let Some(job_id) = next_job_id_opt else { break };
 

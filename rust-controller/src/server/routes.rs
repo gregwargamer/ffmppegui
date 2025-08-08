@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::{agents::AgentInfo, state::AppState};
+use walkdir::WalkDir;
 
 //page d'accueil
 pub async fn index() -> impl IntoResponse {
@@ -80,9 +81,48 @@ pub async fn scan(State(_state): State<Arc<AppState>>, Json(body): Json<ScanRequ
     if body.inputRoot.is_empty() || body.outputRoot.is_empty() || body.mediaType.is_empty() || body.codec.is_empty() {
         return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"invalid request"}))).into_response();
     }
-    let jobs: Vec<crate::jobs::PlanJob> = vec![]; //bouchon, listera plus tard
-    let total: u64 = 0;
-    Json(ScanResponse { count: jobs.len(), totalBytes: total, jobs })
+    let recursive = body.recursive.unwrap_or(true);
+    let mirror = body.mirrorStructure.unwrap_or(true);
+    let media = body.mediaType.to_lowercase();
+    let src_root = std::path::Path::new(&body.inputRoot);
+    let out_root = std::path::Path::new(&body.outputRoot);
+
+    //extensions autorisées par type
+    let exts_audio = [".mp3", ".wav", ".flac", ".aac", ".m4a", ".ogg", ".opus", ".wma", ".aiff", ".alac"]; 
+    let exts_video = [".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v"]; 
+    let exts_image = [".jpg", ".jpeg", ".png", ".webp", ".tiff", ".bmp", ".heic", ".heif", ".avif"]; 
+
+    let mut results: Vec<crate::jobs::PlanJob> = Vec::new();
+    let mut total: u64 = 0;
+
+    for entry in WalkDir::new(src_root).into_iter().filter_map(|e| e.ok()) {
+        if entry.file_type().is_dir() { if !recursive && entry.depth() > 1 { break; } continue; }
+        let path = entry.path();
+        if !path.is_file() { continue; }
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        let dot_ext = format!(".{}", ext);
+        let keep = match media.as_str() {
+            "audio" => exts_audio.contains(&dot_ext.as_str()),
+            "video" => exts_video.contains(&dot_ext.as_str()),
+            _ => exts_image.contains(&dot_ext.as_str()),
+        };
+        if !keep { continue; }
+        let meta = match tokio_fs::metadata(path).await { Ok(m) => m, Err(_) => continue };
+        let rel = pathdiff::diff_paths(path, src_root).unwrap_or_else(|| std::path::PathBuf::from(entry.file_name()));
+        let base = if mirror { out_root.join(&rel) } else { out_root.join(path.file_name().unwrap_or_default()) };
+        let out = base.with_extension("");
+        //extension de sortie déduite au moment du dispatch
+        results.push(crate::jobs::PlanJob {
+            source_path: path.to_string_lossy().to_string(),
+            relative_path: rel.to_string_lossy().to_string(),
+            media_type: match media.as_str() { "audio" => crate::jobs::MediaType::Audio, "video" => crate::jobs::MediaType::Video, _ => crate::jobs::MediaType::Image },
+            size_bytes: meta.len(),
+            output_path: out.to_string_lossy().to_string(),
+            codec: body.codec.clone(),
+        });
+        total += meta.len();
+    }
+    Json(ScanResponse { count: results.len(), totalBytes: total, jobs: results })
 }
 
 #[derive(Deserialize)]
