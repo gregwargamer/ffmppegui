@@ -1,0 +1,6 @@
+[workspace]
+members = [
+  "rust-controller",
+  "rust-agent",
+]
+resolver = "2"
