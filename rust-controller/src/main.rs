@@ -7,6 +7,8 @@ mod config;
 mod server;
 mod jobs;
 mod agents;
+mod state;
+mod ffmpeg;
 
 //point d'entrée asynchrone
 #[tokio::main]
@@ -15,8 +17,11 @@ async fn main() -> anyhow::Result<()> {
     let filter_layer = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     fmt().with_env_filter(filter_layer).init();
 
+    //état partagé (agents, tokens, paramètres)
+    let state = state::AppState::new();
+
     //construction du routeur HTTP
-    let app = server::build_router();
+    let app = server::build_router(state);
 
     //configuration d'écoute par défaut
     let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
