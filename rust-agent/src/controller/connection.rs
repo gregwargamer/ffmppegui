@@ -1,4 +1,5 @@
 //connexion au contrôleur (client WebSocket minimal)
+//connexion au contrôleur (client WebSocket minimal)
 use crate::config::AgentConfig;
 use futures::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
@@ -7,6 +8,7 @@ use uuid::Uuid;
 use sysinfo::SystemExt;
 use tokio::time::{sleep, Duration};
 use tokio::process::Command;
+use tokio::sync::mpsc;
 
 //boucle réseau principale
 pub async fn run_agent_connection(cfg: &AgentConfig) -> anyhow::Result<()> {
@@ -16,7 +18,7 @@ pub async fn run_agent_connection(cfg: &AgentConfig) -> anyhow::Result<()> {
     let url: Url = Url::parse(&url)?;
 
     //connexion
-    let (mut ws, _resp) = tokio_tungstenite::connect_async(url).await?;
+    let (ws, _resp) = tokio_tungstenite::connect_async(url).await?;
 
     //envoi du message register
     let id = format!("{}-{}", hostname::get()?.to_string_lossy(), std::process::id());
@@ -31,16 +33,30 @@ pub async fn run_agent_connection(cfg: &AgentConfig) -> anyhow::Result<()> {
             "token": cfg.token,
         }
     });
-    ws.send(Message::Text(reg.to_string())).await?;
+    let (mut sink, mut stream) = ws.split();
+
+    //canal d'envoi texte
+    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+
+    //tâche d'écriture vers le socket
+    tokio::spawn(async move {
+        while let Some(text) = rx.recv().await {
+            let _ = sink.send(Message::Text(text)).await;
+        }
+    });
+
+    //envoi du register initial
+    let _ = tx.send(reg.to_string());
 
     //boucle heartbeats
-    let (mut sink, mut stream) = ws.split();
-    tokio::spawn(heartbeat_loop(cfg.clone(), sink.clone()));
+    let hb_tx = tx.clone();
+    tokio::spawn(heartbeat_loop(cfg.clone(), hb_tx));
 
     //réception
     while let Some(msg) = stream.next().await {
         match msg {
             Ok(Message::Text(text)) => {
+                //journalisation du message reçu
                 tracing::debug!(%text, "controller message");
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
                     if val.get("type").and_then(|v| v.as_str()) == Some("lease") {
@@ -50,11 +66,16 @@ pub async fn run_agent_connection(cfg: &AgentConfig) -> anyhow::Result<()> {
                         let output_url = p.get("outputUrl").and_then(|v| v.as_str()).unwrap_or("").to_string();
                         let ffmpeg_args: Vec<String> = p.get("ffmpegArgs").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
                         let output_ext = p.get("outputExt").and_then(|v| v.as_str()).unwrap_or(".out").to_string();
-                        let _ = handle_lease(cfg, &mut sink, job_id, input_url, output_url, ffmpeg_args, output_ext).await;
+                        //lancer le traitement du lease
+                        let tx_clone = tx.clone();
+                        let cfg_clone = cfg.clone();
+                        tokio::spawn(async move {
+                            let _ = handle_lease(&cfg_clone, tx_clone, job_id, input_url, output_url, ffmpeg_args, output_ext).await;
+                        });
                     }
                 }
             }
-            Ok(Message::Ping(p)) => { /* ping/pong géré automatiquement par le serveur */ }
+            Ok(Message::Ping(_)) => { /* ignoré, ping/pong côté serveur */ }
             Ok(Message::Close(_)) => break,
             _ => {}
         }
@@ -63,57 +84,88 @@ pub async fn run_agent_connection(cfg: &AgentConfig) -> anyhow::Result<()> {
 }
 
 //boucle périodique de heartbeat
-async fn heartbeat_loop(cfg: AgentConfig, mut sink: impl futures::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin + Send + 'static) {
+async fn heartbeat_loop(cfg: AgentConfig, tx: mpsc::UnboundedSender<String>) {
     loop {
+        //construction message heartbeat
         let msg = serde_json::json!({
             "type": "heartbeat",
             "payload": {"id": format!("{}-{}", hostname::get().map(|h| h.to_string_lossy().to_string()).unwrap_or_default(), std::process::id())}
         });
-        if sink.send(Message::Text(msg.to_string())).await.is_err() { break; }
+        //envoi au canal socket
+        if tx.send(msg.to_string()).is_err() { break; }
         sleep(Duration::from_secs(10)).await;
     }
 }
 
 //traitement d'un lease: exécuter ffmpeg et uploader
-async fn handle_lease(cfg: &AgentConfig, sink: &mut (impl futures::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin), job_id: String, input_url: String, output_url: String, ffmpeg_args: Vec<String>, output_ext: String) -> anyhow::Result<()> {
-    use tokio::fs;
-    use tokio::io::AsyncReadExt;
-    use tokio::io::AsyncWriteExt;
-    use reqwest::Client;
-    use std::path::PathBuf;
-
+async fn handle_lease(cfg: &AgentConfig, tx: mpsc::UnboundedSender<String>, job_id: String, input_url: String, output_url: String, ffmpeg_args: Vec<String>, output_ext: String) -> anyhow::Result<()> {
     //dossier temporaire
     let tmp_dir = std::env::temp_dir().join("ffmpegeasy");
-    fs::create_dir_all(&tmp_dir).await.ok();
+    tokio::fs::create_dir_all(&tmp_dir).await.ok();
     let tmp_out = tmp_dir.join(format!("{}{}", job_id, output_ext));
 
-    //lancement de ffmpeg
+    //construction de la commande ffmpeg
     let mut cmd = Command::new(&cfg.ffmpeg_path);
     cmd.arg("-i").arg(&input_url);
-    for a in ffmpeg_args { cmd.arg(a); }
+    for a in &ffmpeg_args { cmd.arg(a); }
     cmd.arg(&tmp_out);
-    let status = cmd.status().await?;
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::null());
+
+    //lancement du processus
+    let mut child = cmd.spawn()?;
+    if let Some(mut stdout) = child.stdout.take() {
+        //tâche de parsing de la progression
+        let tx_progress = tx.clone();
+        let job_id_clone = job_id.clone();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncBufReadExt, BufReader};
+            let mut reader = BufReader::new(stdout);
+            let mut line = String::new();
+            let mut payload = serde_json::Map::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line).await {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        if let Some((k, v)) = line.trim().split_once('=') {
+                            payload.insert(k.trim().to_string(), serde_json::Value::String(v.trim().to_string()));
+                            if k.trim() == "progress" {
+                                let msg = serde_json::json!({"type":"progress","payload": {"jobId": job_id_clone, "data": payload}});
+                                let _ = tx_progress.send(msg.to_string());
+                                payload = serde_json::Map::new();
+                            }
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+    }
+
+    //attente fin de ffmpeg
+    let status = child.wait().await?;
     if !status.success() {
         let msg = serde_json::json!({"type":"complete","payload":{"jobId": job_id, "agentId": format!("{}-{}", hostname::get()?.to_string_lossy(), std::process::id()), "success": false}}).to_string();
-        let _ = sink.send(Message::Text(msg)).await;
+        let _ = tx.send(msg);
         return Ok(())
     }
 
-    //upload
-    let client = Client::new();
-    let file = fs::File::open(&tmp_out).await?;
+    //upload du résultat
+    let client = reqwest::Client::new();
+    let file = tokio::fs::File::open(&tmp_out).await?;
     let size = file.metadata().await?.len();
     let stream = reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::new(file));
     let resp = client.put(&output_url).header(reqwest::header::CONTENT_LENGTH, size).body(stream).send().await?;
     if !resp.status().is_success() {
         let msg = serde_json::json!({"type":"complete","payload":{"jobId": job_id, "agentId": format!("{}-{}", hostname::get()?.to_string_lossy(), std::process::id()), "success": false}}).to_string();
-        let _ = sink.send(Message::Text(msg)).await;
+        let _ = tx.send(msg);
         return Ok(())
     }
     let msg = serde_json::json!({"type":"complete","payload":{"jobId": job_id, "agentId": format!("{}-{}", hostname::get()?.to_string_lossy(), std::process::id()), "success": true}}).to_string();
-    let _ = sink.send(Message::Text(msg)).await;
-    //nettoyage
-    let _ = fs::remove_file(&tmp_out).await;
+    let _ = tx.send(msg);
+    //nettoyage du fichier temporaire
+    let _ = tokio::fs::remove_file(&tmp_out).await;
     Ok(())
 }
 

@@ -67,6 +67,12 @@ async fn handle_agent_socket(state: Arc<AppState>, socket: WebSocket) {
                         Some("heartbeat") => {
                             if let Some(id) = val.pointer("/payload/id").and_then(|v| v.as_str()) { state.update_heartbeat(id).await; }
                         }
+                        Some("progress") => {
+                            //journaliser simplement la progression
+                            if let Some(job_id) = val.pointer("/payload/jobId").and_then(|v| v.as_str()) {
+                                tracing::debug!(job_id, "progress update");
+                            }
+                        }
                         Some("complete") => {
                             let job_id = val.pointer("/payload/jobId").and_then(|v| v.as_str()).unwrap_or("");
                             let success = val.pointer("/payload/success").and_then(|v| v.as_bool()).unwrap_or(false);
