@@ -28,8 +28,19 @@ pub async fn options_ok() -> impl IntoResponse { StatusCode::NO_CONTENT }
 //liste des nœuds (agents)
 pub async fn nodes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let list: Vec<AgentInfo> = state.agents.read().await.values().cloned().collect();
+    let totals = {
+        let running_jobs: u32 = list.iter().map(|a| a.active_jobs).sum();
+        let total_jobs = state.jobs.read().await.len();
+        let pending_jobs = state.pending_jobs.read().await.len();
+        serde_json::json!({
+            "totalJobs": total_jobs,
+            "pendingJobs": pending_jobs,
+            "runningJobs": running_jobs
+        })
+    };
     Json(serde_json::json!({
-        "agents": list
+        "agents": list,
+        "totals": totals
     }))
 }
 
@@ -73,6 +84,7 @@ pub struct ScanRequest {
     pub mirrorStructure: Option<bool>,
     pub mediaType: String,
     pub codec: String,
+    pub options: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -121,6 +133,7 @@ pub async fn scan(State(_state): State<Arc<AppState>>, Json(body): Json<ScanRequ
             size_bytes: meta.len(),
             output_path: out.to_string_lossy().to_string(),
             codec: body.codec.clone(),
+            options: body.options.clone(),
         });
         total += meta.len();
     }
@@ -156,7 +169,7 @@ pub async fn start(State(state): State<Arc<AppState>>, Json(body): Json<StartPay
             plan: pj,
         };
         state.jobs.write().await.insert(id.clone(), job);
-        state.pending_jobs.write().await.push(id.clone());
+        state.pending_jobs.write().await.push_back(id.clone());
         ids.push(id);
     }
     Json(serde_json::json!({"accepted": ids.len()}))
@@ -216,5 +229,10 @@ pub async fn stream_output(State(state): State<Arc<AppState>>, Path(job_id): Pat
         }
     }
     if tokio_fs::rename(&tmp_path, &final_path).await.is_err() { return (StatusCode::INTERNAL_SERVER_ERROR, "io").into_response(); }
+    //mise à jour de l'état du job en 'completed'
+    if let Some(mut job) = state.jobs.write().await.get_mut(&job_id) {
+        job.status = "completed".to_string();
+        job.updated_at = chrono::Utc::now().timestamp_millis();
+    }
     StatusCode::OK
 }

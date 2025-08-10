@@ -1,5 +1,5 @@
 //état partagé du contrôleur
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use chrono::Utc;
@@ -14,7 +14,7 @@ pub struct AppState {
     pub allowed_tokens: RwLock<HashSet<String>>,    //tokens d'appairage autorisés
     pub public_base_url: RwLock<String>,            //URL publique
     pub jobs: RwLock<HashMap<String, Job>>,         //jobs connus
-    pub pending_jobs: RwLock<Vec<String>>,          //file d'attente (IDs de jobs)
+    pub pending_jobs: RwLock<VecDeque<String>>,     //file d'attente FIFO (IDs de jobs)
 }
 
 impl AppState {
@@ -27,7 +27,7 @@ impl AppState {
             allowed_tokens: RwLock::new(HashSet::from([default_token])),
             public_base_url: RwLock::new("http://localhost:4000".to_string()),
             jobs: RwLock::new(HashMap::new()),
-            pending_jobs: RwLock::new(Vec::new()),
+            pending_jobs: RwLock::new(VecDeque::new()),
         })
     }
 

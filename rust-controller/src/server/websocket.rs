@@ -56,6 +56,9 @@ async fn handle_agent_socket(state: Arc<AppState>, socket: WebSocket) {
                                 encoders: val.pointer("/payload/encoders").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect()).unwrap_or_default(),
                                 active_jobs: 0,
                                 last_heartbeat: Utc::now().timestamp_millis(),
+                                cpu: 0.0,
+                                mem_used: 0,
+                                mem_total: 0,
                             };
                             state.agents.write().await.insert(id.clone(), info);
                             state.agent_channels.write().await.insert(id.clone(), tx.clone());
@@ -66,18 +69,28 @@ async fn handle_agent_socket(state: Arc<AppState>, socket: WebSocket) {
                         }
                         Some("heartbeat") => {
                             if let Some(id) = val.pointer("/payload/id").and_then(|v| v.as_str()) { state.update_heartbeat(id).await; }
+                            //optionnel: traiter des métriques si présentes
+                            if let Some(id) = val.pointer("/payload/id").and_then(|v| v.as_str()) {
+                                if let Some(mut info) = state.agents.write().await.get_mut(id) {
+                                    if let Some(active) = val.pointer("/payload/activeJobs").and_then(|v| v.as_u64()) { info.active_jobs = active as u32; }
+                                    if let Some(cpu) = val.pointer("/payload/cpu").and_then(|v| v.as_f64()) { info.cpu = cpu as f32; }
+                                    if let Some(mu) = val.pointer("/payload/memUsed").and_then(|v| v.as_u64()) { info.mem_used = mu; }
+                                    if let Some(mt) = val.pointer("/payload/memTotal").and_then(|v| v.as_u64()) { info.mem_total = mt; }
+                                }
+                            }
                         }
                         Some("progress") => {
                             //journaliser simplement la progression
                             if let Some(job_id) = val.pointer("/payload/jobId").and_then(|v| v.as_str()) {
                                 tracing::debug!(job_id, "progress update");
+                                if let Some(mut job) = state.jobs.write().await.get_mut(job_id) { job.status = "running".to_string(); job.updated_at = Utc::now().timestamp_millis(); }
                             }
                         }
                         Some("complete") => {
                             let job_id = val.pointer("/payload/jobId").and_then(|v| v.as_str()).unwrap_or("");
                             let success = val.pointer("/payload/success").and_then(|v| v.as_bool()).unwrap_or(false);
                             if let Some(agent_id) = val.pointer("/payload/agentId").and_then(|v| v.as_str()) {
-                                if let Some(mut info) = state.agents.write().await.get_mut(agent_id) { if info.active_jobs > 0 { info.active_jobs -= 1; } }
+                            if let Some(mut info) = state.agents.write().await.get_mut(agent_id) { if info.active_jobs > 0 { info.active_jobs -= 1; } }
                             }
                             if let Some(mut job) = state.jobs.write().await.get_mut(job_id) { job.status = if success { "uploaded" } else { "failed" }.to_string(); job.updated_at = Utc::now().timestamp_millis(); }
                             //redispatch

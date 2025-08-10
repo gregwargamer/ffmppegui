@@ -1,5 +1,6 @@
 //types de médias et structures de jobs
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 
 //type de média
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -19,6 +20,8 @@ pub struct PlanJob {
     pub size_bytes: u64,
     pub output_path: String,
     pub codec: String,
+    #[serde(skip_serializing_if = "Option::is_none")] 
+    pub options: Option<JsonValue>,
 }
 
 //job complet

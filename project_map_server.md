@@ -1,5 +1,9 @@
 # Project Map - FFmpeg Easy Server Worker
 
+> Note de synchronisation
+>
+> La structure décrite ici est une cible. L'implémentation actuelle dans ce dépôt propose un contrôleur Node (`gui/`) et un agent Node (`server/`) opérationnels avec UI web, ainsi qu'une ébauche de GUI Python (`gui_py/`). Les fichiers Python listés dans `server/` (p.ex. `encode_server.py`, `job_processor.py`, etc.) ne sont pas encore présents. Ce document reste la référence fonctionnelle pour les évolutions à venir.
+
 ## Vue d'ensemble
 Application serveur pour traitement d'encodage FFmpeg distribué. Worker autonome capable de détecter ses capacités matérielles et de traiter des jobs d'encodage reçus via WebSocket.
 

@@ -1,80 +1,4 @@
-<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Distributed FFmpeg GUI</title>
-    <link rel="stylesheet" href="/style.css" />
-  </head>
-  <body>
-    <h1>Distributed FFmpeg</h1>
-    <section>
-      <h2>Pair Agent</h2>
-      <input id="pairToken" placeholder="25-char token" />
-      <button id="btnPair">Pair</button>
-    </section>
-    <section>
-      <h2>Paths</h2>
-      <div>
-        <label>Input root</label>
-        <input id="inputRoot" />
-        <button id="pickInput">Pick…</button>
-      </div>
-      <div>
-        <label>Output root</label>
-        <input id="outputRoot" />
-        <button id="pickOutput">Pick…</button>
-      </div>
-      <div>
-        <label><input type="checkbox" id="recursive" checked /> Recursive</label>
-        <label><input type="checkbox" id="mirror" checked /> Mirror</label>
-      </div>
-    </section>
-    <section>
-      <h2>Encoding</h2>
-      <div>
-        <label>Media</label>
-        <select id="mediaType">
-          <option value="audio">audio</option>
-          <option value="video">video</option>
-          <option value="image">image</option>
-        </select>
-        <label>Codec</label>
-        <select id="codec"></select>
-      </div>
-      <div id="rowPreset">
-        <label>Preset</label>
-        <select id="preset">
-          <option>veryslow</option>
-          <option>slower</option>
-          <option>slow</option>
-          <option selected>medium</option>
-          <option>fast</option>
-          <option>faster</option>
-          <option>veryfast</option>
-        </select>
-      </div>
-      <div id="rowCrf">
-        <label>CRF</label>
-        <input id="crf" type="number" value="23" />
-      </div>
-      <div id="rowBitrate">
-        <label>Bitrate</label>
-        <input id="bitrate" value="192k" />
-      </div>
-      <div>
-        <button id="btnScan">Scan</button>
-        <button id="btnStart" disabled>Start</button>
-      </div>
-      <div id="scanSummary"></div>
-    </section>
-    <section>
-      <h2>Nodes</h2>
-      <pre id="nodes"></pre>
-    </section>
-    <script src="/app.js"></script>
-  </body>
-  </html>
+<!-- document HTML minimal dupliqué supprimé -->
 <!doctype html>
 <html lang="en">
 <head>
@@ -165,7 +89,7 @@
 
     <section class="panel">
       <h2>Nodes</h2>
-      <div id="nodes"></div>
+    <div id="nodes"></div>
     </section>
   </div>
   <script src="/app.js"></script>

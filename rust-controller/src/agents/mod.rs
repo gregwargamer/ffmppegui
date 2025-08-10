@@ -10,4 +10,7 @@ pub struct AgentInfo {
     pub encoders: Vec<String>,
     pub active_jobs: u32,
     pub last_heartbeat: i64,
+    pub cpu: f32,
+    pub mem_used: u64,
+    pub mem_total: u64,
 }

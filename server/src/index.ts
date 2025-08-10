@@ -20,6 +20,7 @@ const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg';
 
 const agentId = `${os.hostname()}-${process.pid}`;
 let activeJobs = 0;
+let lastHeartbeatAt = Date.now();
 
 async function execCapture(cmd: string, args: string[]): Promise<string> {
   return new Promise((resolve) => {
@@ -74,7 +75,16 @@ ws.on('message', async (data) => {
 
 ws.on('close', () => { logger.info('websocket closed'); process.exit(0); });
 
-setInterval(() => { try { ws.send(JSON.stringify({ type: 'heartbeat', payload: { id: agentId, activeJobs } })); } catch {} }, 10000);
+setInterval(() => {
+  try {
+    lastHeartbeatAt = Date.now();
+    const memTotal = os.totalmem();
+    const memFree = os.freemem();
+    const memUsed = memTotal - memFree;
+    const load = os.loadavg()[0] || 0;
+    ws.send(JSON.stringify({ type: 'heartbeat', payload: { id: agentId, activeJobs, cpu: load, memUsed, memTotal } }));
+  } catch {}
+}, 10000);
 
 async function handleLease(p: any) {
   activeJobs += 1;
@@ -89,9 +99,9 @@ async function handleLease(p: any) {
     await fs.promises.mkdir(tmpDir, { recursive: true });
     const tmpOut = path.join(tmpDir, `${jobId}${outputExt}`);
 
-    const args = ['-i', inputUrl, ...ffmpegArgs, tmpOut];
+  const args = ['-i', inputUrl, ...ffmpegArgs, tmpOut];
     logger.info({ jobId, args }, 'ffmpeg start');
-    const child = spawn(FFMPEG_PATH, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(FFMPEG_PATH, args, { stdio: ['ignore', 'pipe', 'pipe'] });
 
     child.stdout.on('data', (d) => {
       const text = d.toString();
@@ -101,12 +111,34 @@ async function handleLease(p: any) {
       try { ws.send(JSON.stringify({ type: 'progress', payload })); } catch {}
     });
 
-    const rc: number = await new Promise((resolve) => { child.on('close', (code) => resolve(code ?? 1)); });
+  //timeout de job basique (30 min)
+  const rc: number = await new Promise((resolve) => {
+    let done = false;
+    const timer = setTimeout(() => { if (!done) { try { child.kill('SIGKILL'); } catch {} resolve(124); } }, 30 * 60 * 1000);
+    child.on('close', (code) => { done = true; clearTimeout(timer); resolve(code ?? 1); });
+  });
     if (rc !== 0) { logger.warn({ jobId, rc }, 'ffmpeg failed'); try { ws.send(JSON.stringify({ type: 'complete', payload: { jobId, agentId, success: false } })); } catch {} throw new Error(`ffmpeg failed rc=${rc}`); }
 
     const stat = await fs.promises.stat(tmpOut);
     logger.debug({ jobId, size: stat.size }, 'upload begin');
-    await axios.put(outputUrl, fs.createReadStream(tmpOut), { headers: { 'Content-Length': String(stat.size) }, maxContentLength: Infinity, maxBodyLength: Infinity, validateStatus: () => true }).then((r) => { if (r.status < 200 || r.status >= 300) throw new Error(`upload failed status=${r.status}`); });
+  //upload avec retries
+  {
+    const maxRetries = 3;
+    let attempt = 0; let uploaded = false;
+    while (attempt < maxRetries && !uploaded) {
+      attempt += 1;
+      try {
+        const stream = fs.createReadStream(tmpOut);
+        const r = await axios.put(outputUrl, stream, { headers: { 'Content-Length': String(stat.size) }, maxContentLength: Infinity, maxBodyLength: Infinity, timeout: 120000, validateStatus: () => true });
+        if (r.status >= 200 && r.status < 300) { uploaded = true; break; }
+        logger.warn({ attempt, status: r.status }, 'upload failed');
+      } catch (e) {
+        logger.warn({ attempt, err: String(e) }, 'upload error');
+      }
+      await new Promise(res => setTimeout(res, 2000));
+    }
+    if (!uploaded) throw new Error('upload failed after retries');
+  }
 
     logger.info({ jobId }, 'upload done');
     try { ws.send(JSON.stringify({ type: 'complete', payload: { jobId, agentId, success: true } })); } catch {}

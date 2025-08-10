@@ -511,39 +511,101 @@ function sendToAgent(agentId: string, msg: any) {
 }
 
 function pickAgentForJob(job: Job): string | undefined {
-  let bestId: string | undefined; let bestFree = -1;
+  //this part do that
+  //sélection basée sur compatibilité d'encodeur et plus faible charge
+  const required = requiredEncoders(job);
+  let bestId: string | undefined;
+  let bestLoad = Number.POSITIVE_INFINITY;
   for (const [id, rec] of agents.entries()) {
     const free = rec.info.concurrency - rec.info.activeJobs;
-    if (free > bestFree) { bestFree = free; bestId = id; }
+    if (free <= 0) continue;
+    const hasCompatible = rec.info.encoders.some((e) => required.includes(e));
+    if (!hasCompatible) continue;
+    if (rec.info.activeJobs < bestLoad) { bestLoad = rec.info.activeJobs; bestId = id; }
   }
-  return bestId;
+  if (bestId) return bestId;
+  //fallback: n'importe quel agent libre
+  for (const [id, rec] of agents.entries()) {
+    const free = rec.info.concurrency - rec.info.activeJobs;
+    if (free > 0) return id;
+  }
+  return undefined;
+}
+
+function requiredEncoders(job: Job): string[] {
+  if (job.mediaType === 'audio') {
+    switch (job.codec) {
+      case 'flac': return ['flac'];
+      case 'alac': return ['alac'];
+      case 'aac': return ['aac'];
+      case 'mp3': return ['libmp3lame', 'mp3'];
+      case 'opus': return ['libopus', 'opus'];
+      case 'ogg':
+      case 'vorbis': return ['libvorbis', 'vorbis'];
+      default: return ['aac'];
+    }
+  }
+  if (job.mediaType === 'video') {
+    switch (job.codec) {
+      case 'h264': return ['h264_nvenc', 'h264_qsv', 'h264_videotoolbox', 'libx264', 'h264'];
+      case 'h265':
+      case 'hevc': return ['hevc_nvenc', 'hevc_qsv', 'hevc_videotoolbox', 'libx265', 'hevc', 'h265'];
+      case 'av1': return ['av1_nvenc', 'av1_qsv', 'libsvtav1', 'libaom-av1', 'av1'];
+      case 'vp9': return ['vp9_qsv', 'libvpx-vp9', 'vp9'];
+      default: return ['libx264', 'h264'];
+    }
+  }
+  switch (job.codec) {
+    case 'avif': return ['libaom-av1'];
+    case 'heic':
+    case 'heif': return ['libx265'];
+    case 'webp': return ['libwebp'];
+    case 'png': return ['png'];
+    case 'jpeg':
+    case 'jpg': return ['mjpeg'];
+    default: return ['png'];
+  }
 }
 
 function tryDispatch() {
-  pendingJobs.sort((a, b) => b.sizeBytes - a.sizeBytes);
+  //this part do that
+  //file FIFO stricte et dispatch par compatibilité
   let madeProgress = true;
   while (madeProgress) {
     madeProgress = false;
-    for (const [id, rec] of agents.entries()) {
-      const free = rec.info.concurrency - rec.info.activeJobs;
-      if (free <= 0) continue;
-      const job = pendingJobs.shift();
-      if (!job) break;
-      const agentId = pickAgentForJob(job);
-      if (!agentId) { pendingJobs.unshift(job); continue; }
-      const assigned = agents.get(agentId);
-      if (!assigned) { pendingJobs.unshift(job); continue; }
-      const base = getPublicBaseUrl();
-      const inputUrl = `${base}/stream/input/${encodeURIComponent(job.id)}?token=${job.inputToken}`;
-      const outputUrl = `${base}/stream/output/${encodeURIComponent(job.id)}?token=${job.outputToken}`;
-      const { args } = buildFfmpegArgs(job);
-      const outputExt = path.extname(job.outputPath) || computeOutputExt(job.mediaType, job.codec);
-      job.status = 'assigned'; job.nodeId = agentId; job.updatedAt = Date.now(); assigned.info.activeJobs += 1;
-      app.log.debug({ agentId, jobId: job.id, inputUrl }, 'dispatch job');
-      sendToAgent(agentId, { type: 'lease', payload: { jobId: job.id, inputUrl, outputUrl, ffmpegArgs: args, outputExt, threads: 0 } });
-      madeProgress = true;
+    const job = pendingJobs.shift();
+    if (!job) break;
+    const agentId = pickAgentForJob(job);
+    if (!agentId) { pendingJobs.push(job); break; }
+    const assigned = agents.get(agentId);
+    if (!assigned) { pendingJobs.push(job); break; }
+    const base = getPublicBaseUrl();
+    const inputUrl = `${base}/stream/input/${encodeURIComponent(job.id)}?token=${job.inputToken}`;
+    const outputUrl = `${base}/stream/output/${encodeURIComponent(job.id)}?token=${job.outputToken}`;
+    let { args } = buildFfmpegArgs(job);
+    //sélection d'un encodeur préféré compatible avec l'agent
+    if (job.mediaType === 'video') {
+      const enc = selectPreferredEncoder(job, assigned.info.encoders);
+      if (enc) {
+        const idx = args.findIndex((a, i) => a === '-c:v' && i + 1 < args.length);
+        if (idx >= 0) args[idx + 1] = enc;
+        else { args.push('-c:v', enc); }
+        //paramétrage générique par famille
+        if (job.codec === 'vp9' && !args.includes('-row-mt')) { args.push('-b:v', '0', '-row-mt', '1'); }
+      }
     }
+    const outputExt = path.extname(job.outputPath) || computeOutputExt(job.mediaType, job.codec);
+    job.status = 'assigned'; job.nodeId = agentId; job.updatedAt = Date.now(); assigned.info.activeJobs += 1;
+    app.log.debug({ agentId, jobId: job.id, inputUrl }, 'dispatch job');
+    sendToAgent(agentId, { type: 'lease', payload: { jobId: job.id, inputUrl, outputUrl, ffmpegArgs: args, outputExt, threads: 0 } });
+    madeProgress = true;
   }
+}
+
+function selectPreferredEncoder(job: Job, encoders: string[]): string | undefined {
+  const req = requiredEncoders(job);
+  for (const cand of req) { if (encoders.includes(cand)) return cand; }
+  return undefined;
 }
 
 async function main() {
