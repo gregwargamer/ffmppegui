@@ -1,0 +1,5 @@
+out=/usr/bin/bash
+mkdir -p .
+sleep 0.05
+printf 'ok' > 
+printf 'progress=end\n'
