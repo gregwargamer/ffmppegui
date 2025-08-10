@@ -367,6 +367,14 @@ static void handle_message(AgentState *st, const char *txt) {
         if (!outputExt) outputExt = ".out";
         if (st->active_jobs >= st->concurrency) { json_decref(root); return; }
         st->active_jobs += 1;
+        json_t *acc = json_object();
+        json_t *pl = json_object();
+        json_object_set_new(acc, "type", json_string("lease-accepted"));
+        json_object_set_new(pl, "agentId", json_string(st->agent_id));
+        json_object_set_new(pl, "jobId", json_string(jobId));
+        json_object_set_new(acc, "payload", pl);
+        enqueue_ws_json(st, acc);
+        json_decref(acc);
         LeaseTask *t = (LeaseTask*)calloc(1, sizeof(LeaseTask));
         t->st = st;
         t->jobId = strdup(jobId);
