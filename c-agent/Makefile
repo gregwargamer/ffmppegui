@@ -4,8 +4,10 @@
 #this other part do that
 # variables de compilation
 CC := gcc
+#this part do that
+# flags de compilation pour Debian moderne (libwebsockets/jansson/curl)
 CFLAGS := -O2 -g -std=c11 -Wall -Wextra -Wpedantic $(shell pkg-config --cflags libwebsockets jansson libcurl)
-LDFLAGS := $(shell pkg-config --libs libwebsockets jansson libcurl)
+LDFLAGS := $(shell pkg-config --libs libwebsockets jansson libcurl) -lpthread
 PREFIX ?= /usr/local
 BINARY := c-agent
 SRC := src/main.c
